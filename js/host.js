@@ -175,7 +175,7 @@ const Host = (() => {
     text = String(text || '').trim().slice(0, 200);
     if (!text) return;
     G.chat.push({ name: p.name, avatar: p.avatar, text });
-    if (G.chat.length > 100) G.chat = G.chat.slice(-100);
+    if (G.chat.length > 250) G.chat = G.chat.slice(-250);
     if (G.phase === 'day') { G.lastChatAt = Date.now(); reactToChat(p, text); }
     broadcast();
   }
@@ -686,7 +686,8 @@ const Host = (() => {
     G.phase = 'night';
     G.night = { actions: {} };
     G.votes = null;
-    G.chat = [];
+    // Chat history survives the night — a divider marks where the new round starts.
+    G.chat.push({ divider: `Round ${G.dayNum}` });
     // Yesterday's accusations fade, but aren't forgotten.
     G.players.forEach(x => {
       if (x.susp) Object.keys(x.susp).forEach(k => { x.susp[k] = Math.round(x.susp[k] / 2); });
@@ -1793,7 +1794,7 @@ const Host = (() => {
     }
 
     if (G.phase === 'lobby') {
-      view.chat = G.chat.slice(-50);
+      view.chat = G.chat.slice(-150);
       view.canChat = true;
     }
 
@@ -1826,7 +1827,7 @@ const Host = (() => {
           role: !t.alive && roleVisibleTo(p, t) && t.role ? t.role : null,
         })),
       };
-      view.chat = G.chat.slice(-50);
+      view.chat = G.chat.slice(-150);
       view.canChat = p.alive;
     }
 

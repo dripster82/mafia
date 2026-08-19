@@ -401,7 +401,9 @@ const Player = (() => {
     return `<div class="card"><h3>💬 Table talk</h3>
       <div id="chat-log" class="chat-log">${
         view.chat.length
-          ? view.chat.map(m => `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+          ? view.chat.map(m => m.divider
+              ? `<div class="chat-divider">—— ${esc(m.divider)} ——</div>`
+              : `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
           : '<p class="muted small-text">No one has said anything yet…</p>'
       }</div>
       ${view.canChat ? `<div class="chat-row">

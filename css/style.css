@@ -134,6 +134,10 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .chat-msg { font-size: 0.9rem; line-height: 1.4; word-break: break-word; }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
+.chat-divider {
+  text-align: center; font-size: 0.8rem; letter-spacing: 0.08em;
+  color: var(--muted); text-transform: uppercase; margin: 4px 0;
+}
 .chat-row { display: flex; gap: 8px; }
 .chat-row input { flex: 1; padding: 10px 12px; font-size: 1rem; }
 /* Phase countdown */
