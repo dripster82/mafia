@@ -75,6 +75,8 @@ const Player = (() => {
       const pc = new RTCPeerConnection(cfg);
       const found = new Set();
       pc.createDataChannel('probe');
+      pc.addEventListener('icecandidateerror', e =>
+        dbg(`ice probe server error: ${e.url || '?'} code=${e.errorCode || '?'} ${e.errorText || ''}`));
       pc.onicecandidate = e => {
         if (e.candidate) {
           const m = / typ (\w+)/.exec(e.candidate.candidate);
@@ -175,6 +177,14 @@ const Player = (() => {
         pc.addEventListener('connectionstatechange', () => dbg('pc connection: ' + pc.connectionState));
         pc.addEventListener('icegatheringstatechange', () => dbg('pc gathering: ' + pc.iceGatheringState));
         pc.addEventListener('signalingstatechange', () => dbg('pc signaling: ' + pc.signalingState));
+        pc.addEventListener('icecandidateerror', e =>
+          dbg(`ice server error: ${e.url || '?'} code=${e.errorCode || '?'} ${e.errorText || ''}`));
+        pc.addEventListener('icecandidate', e => {
+          if (e.candidate) {
+            const m = / typ (\w+)/.exec(e.candidate.candidate);
+            if (m) dbg('local candidate: ' + m[1]);
+          } else dbg('local gathering complete');
+        });
       }, 2000);
     });
     peer.on('disconnected', () => {
