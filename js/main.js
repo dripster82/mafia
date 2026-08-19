@@ -36,6 +36,11 @@ const App = (() => {
   }
 
   function init() {
+    // The deploy workflow stamps __BUILD__ with the commit; locally it stays
+    // unreplaced, so show "dev" instead.
+    const ver = el('app-version');
+    if (ver && ver.textContent.includes('__BUILD__')) ver.textContent = 'Version dev';
+
     el('btn-go-host').onclick = () => {
       el('host-error').classList.add('hidden');
       showScreen('host-setup');
