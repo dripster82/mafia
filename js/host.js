@@ -16,6 +16,7 @@ const Host = (() => {
   let G = null;        // game state
   let settings = {
     safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false,
+    ghostVote: false,
     nightTimer: 120, dayTimer: 300,
     roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
              tracker: false, coroner: false, bookkeeper: false, mayor: false,
@@ -51,6 +52,7 @@ const Host = (() => {
       winner: null,
       lastWords: null,     // final message from a vote-eliminated player
       chat: [],            // lobby + day table talk, cleared each night
+      suspicion: {},       // playerId -> score, driven by table talk; bots use it
       log: [],             // public information only — the host can read this
       deadline: null,
     };
@@ -172,7 +174,87 @@ const Host = (() => {
     if (!text) return;
     G.chat.push({ name: p.name, avatar: p.avatar, text });
     if (G.chat.length > 100) G.chat = G.chat.slice(-100);
+    if (G.phase === 'day') reactToChat(p, text);
     broadcast();
+  }
+
+  /* Everyone at the table — bots included — listens to what gets said.
+   * Accusations raise a player's suspicion score, defenses lower it, and a
+   * detective claim carries extra weight. Bots use the scores to vote. */
+  function bumpSuspicion(id, amt) { G.suspicion[id] = (G.suspicion[id] || 0) + amt; }
+
+  function reactToChat(speaker, text) {
+    const lower = text.toLowerCase();
+    const detClaim = /i'?m the detective|i am the detective|detective here|bet my badge/.test(lower);
+    const defend = /innocent|not (the )?mafia|it'?s not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe/.test(lower);
+    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|vote (out|for)?|it'?s |money'?s on|watch|strange|acting/.test(lower);
+
+    const mentioned = [];
+    alivePlayers().forEach(t => {
+      if (t.id === speaker.id) return;
+      if (!lower.includes(t.name.toLowerCase())) return;
+      mentioned.push(t);
+      if (defend) bumpSuspicion(t.id, detClaim ? -4 : -2);
+      else if (accuse) bumpSuspicion(t.id, detClaim ? 5 : 2);
+    });
+    if (!mentioned.length || defend || !accuse) { maybeReconsiderVotes(); return; }
+
+    // Accused bots defend themselves (once per day)…
+    mentioned.filter(t => t.isBot && t.alive).forEach(t => {
+      if (t.defendedDay === G.dayNum || Math.random() > 0.6) return;
+      t.defendedDay = G.dayNum;
+      setTimeout(() => {
+        if (!G || G.phase !== 'day' || !t.alive) return;
+        const line = t.role === 'jester'
+          ? rndOf(['Yes!! I mean… no? Definitely no. 😏', 'Guilty! Of being charming. Nothing else.'])
+          : rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…', 'Me?! I’ve been helping this whole time!']);
+        handleChat(t, line);
+      }, 1500 + Math.random() * 2500);
+    });
+
+    // …and a detective claim can win a believer.
+    if (detClaim && G.agreedDay !== G.dayNum) {
+      const believers = alivePlayers().filter(b =>
+        b.isBot && b.id !== speaker.id && !mentioned.some(m => m.id === b.id) && teamOf(b) !== 'mafia');
+      if (believers.length && Math.random() < 0.5) {
+        G.agreedDay = G.dayNum;
+        const b = rndOf(believers);
+        const accused = mentioned[0];
+        setTimeout(() => {
+          if (!G || G.phase !== 'day' || !b.alive || !accused.alive) return;
+          handleChat(b, rndOf([
+            `If the detective says it's ${accused.name}, that settles it for me.`,
+            `Good enough for me — I'm voting ${accused.name}.`,
+          ]));
+        }, 2000 + Math.random() * 2500);
+      }
+    }
+    maybeReconsiderVotes();
+  }
+
+  /* The most suspicious valid vote target for a bot, if any stands out. */
+  function botSuspicionPick(b, minScore) {
+    const cands = alivePlayers().filter(t =>
+      t.id !== b.id && !(teamOf(b) === 'mafia' && teamOf(t) === 'mafia'));
+    let best = null;
+    cands.forEach(t => {
+      const s = G.suspicion[t.id] || 0;
+      if (s >= (minScore || 2) && (!best || s > (G.suspicion[best.id] || 0))) best = t;
+    });
+    return best;
+  }
+
+  /* Bots that already voted may switch when the mood turns hard. */
+  function maybeReconsiderVotes() {
+    alivePlayers().filter(b => b.isBot && b.id in (G.votes || {})).forEach(b => {
+      if (b.reconsideredDay === G.dayNum || Math.random() > 0.5) return;
+      b.reconsideredDay = G.dayNum;
+      setTimeout(() => {
+        if (!G || G.phase !== 'day' || !b.alive || !(b.id in G.votes)) return;
+        const pick = botSuspicionPick(b, 4);
+        if (pick && G.votes[b.id] !== pick.id) handleVote(b, pick.id);
+      }, 1500 + Math.random() * 3000);
+    });
   }
 
   function handleJoin(conn, msg) {
@@ -245,6 +327,7 @@ const Host = (() => {
       p.drifterUses = 2; p.pledged = false; p.poisonedNight = null;
       p.cleaned = false; p.forged = false; p.recruited = false;
       p.execTargetId = null; p.achievedWin = false; p.lostWin = false;
+      p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0;
       p.actions = []; p.intel = [];
     });
     // Each executioner gets a personal grudge against a random townsperson.
@@ -293,6 +376,8 @@ const Host = (() => {
     G.night = { actions: {} };
     G.votes = null;
     G.chat = [];
+    // Yesterday's accusations fade, but aren't forgotten.
+    Object.keys(G.suspicion).forEach(k => { G.suspicion[k] = Math.round(G.suspicion[k] / 2); });
     setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
     broadcast();
@@ -688,8 +773,21 @@ const Host = (() => {
 
   function voteWeight(p) { return p.pledged ? 2 : 1; }
 
+  function ghostCanVote(p) {
+    return settings.ghostVote && !p.alive && !p.spectator && !p.ghostVoteUsed && p.role;
+  }
+
   function handleVote(p, targetId) {
-    if (G.phase !== 'day' || !p.alive) return;
+    if (G.phase !== 'day') return;
+    if (!p.alive) {
+      // One vote from beyond the grave — castable (or retractable) any day.
+      if (!ghostCanVote(p)) return;
+      if (targetId === 'retract') { delete G.votes[p.id]; broadcast(); return; }
+      if (!alivePlayers().some(t => t.id === targetId)) return;
+      G.votes[p.id] = targetId;
+      broadcast();
+      return; // ghosts never trigger resolution
+    }
     const valid = targetId === 'nobody' ||
       (alivePlayers().some(t => t.id === targetId) && targetId !== p.id);
     if (!valid) return;
@@ -704,6 +802,9 @@ const Host = (() => {
   function resolveVote(forced) {
     if (G.phase !== 'day') return;
 
+    // Ghost votes are spent the day they're counted.
+    const ghostVoters = Object.keys(G.votes).map(getPlayer).filter(v => v && !v.alive);
+
     const tally = { nobody: 0 };
     let castWeight = 0;
     Object.entries(G.votes).forEach(([voterId, t]) => {
@@ -711,6 +812,7 @@ const Host = (() => {
       castWeight += w;
       tally[t] = (tally[t] || 0) + w;
     });
+    ghostVoters.forEach(v => { v.ghostVoteUsed = true; });
     const max = Math.max(0, ...Object.values(tally));
     const top = Object.keys(tally).filter(t => tally[t] === max && max > 0);
 
@@ -984,7 +1086,16 @@ const Host = (() => {
   function botAct(conn) {
     if (!G) return;
     const p = getPlayer(conn._playerId);
-    if (!p || !p.alive) return;
+    if (!p) return;
+    // Dead bots may still spend their ghost vote.
+    if (!p.alive) {
+      if (G.phase === 'day' && ghostCanVote(p) && !(p.id in G.votes) && Math.random() < 0.4) {
+        const known = p.intel && p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
+        const pick = (known && known.length) ? known[0] : botSuspicionPick(p, 3);
+        if (pick) handleVote(p, pick.id);
+      }
+      return;
+    }
     if (G.phase === 'reveal' && !G.confirms[p.id]) {
       handleConfirm(p);
     } else if (G.phase === 'night' && !(p.id in G.night.actions)) {
@@ -1007,7 +1118,13 @@ const Host = (() => {
         } else if (p.role === 'executioner' && p.execTargetId && !p.lostWin && !p.achievedWin) {
           const t = getPlayer(p.execTargetId);
           if (t && t.alive) target = t.id;
-        } else if (teamOf(p) === 'mafia') {
+        }
+        if (!target) {
+          // Listen to the table: a standout suspect draws the vote.
+          const pick = botSuspicionPick(p, 2);
+          if (pick && Math.random() < 0.75) target = pick.id;
+        }
+        if (!target && teamOf(p) === 'mafia') {
           const town = alivePlayers().filter(t => teamOf(t) !== 'mafia');
           target = (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
         }
@@ -1127,17 +1244,19 @@ const Host = (() => {
       Object.entries(G.votes).forEach(([voterId, t]) => {
         const v = getPlayer(voterId);
         counts[t] = (counts[t] || 0) + voteWeight(v);
-        (voters[t] = voters[t] || []).push(v.name);
+        (voters[t] = voters[t] || []).push((v.alive ? '' : '👻 ') + v.name);
       });
       const aliveWeight = alivePlayers().reduce((s, x) => s + voteWeight(x), 0);
       view.vote = {
         yourVote: G.votes[p.id] || null,
         counts,
         voters: settings.showVoters ? voters : null,
-        voted: Object.keys(G.votes).length,
+        voted: alivePlayers().filter(x => x.id in G.votes).length,
         needed: alivePlayers().length,
         majority: Math.floor(aliveWeight / 2) + 1,
-        targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })),
+        ghost: ghostCanVote(p),
+        ghostSpent: !p.alive && !p.spectator && !!p.ghostVoteUsed && settings.ghostVote,
+        targets: alivePlayers().map(t => ({ id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id })),
       };
       view.chat = G.chat.slice(-50);
       view.canChat = p.alive;
@@ -1228,6 +1347,8 @@ const Host = (() => {
             Show who voted for who (unticked = secret ballot)</label>
           <label class="opt"><input type="checkbox" id="opt-no-self-heal" ${settings.noSelfHeal ? 'checked' : ''}>
             Doctor can't protect themselves</label>
+          <label class="opt"><input type="checkbox" id="opt-ghost-vote" ${settings.ghostVote ? 'checked' : ''}>
+            👻 The dead get one last vote — usable on any later day</label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -1313,6 +1434,8 @@ const Host = (() => {
     if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
     const osh = el('opt-no-self-heal');
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
+    const ogv = el('opt-ghost-vote');
+    if (ogv) ogv.onchange = () => { settings.ghostVote = ogv.checked; broadcast(); };
     const ont = el('opt-night-timer');
     if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
     const odt = el('opt-day-timer');

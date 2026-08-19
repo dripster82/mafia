@@ -145,6 +145,8 @@ input[type="text"]:focus { border-color: var(--accent); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .vote-line .vote-target { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.vote-line.self-row { cursor: default; opacity: 0.85; border-style: dashed; display: flex; justify-content: space-between; align-items: center; }
+.vote-line.self-row:hover { filter: none; }
 
 /* Profile editing */
 .profile-row { display: flex; gap: 8px; margin-top: 8px; }

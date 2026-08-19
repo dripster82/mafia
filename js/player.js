@@ -516,6 +516,18 @@ const Player = (() => {
             <h2>You are dead</h2>
             <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
+      // One vote from beyond the grave, if the host enabled it.
+      if (view.phase === 'day' && view.vote && view.vote.ghost) {
+        const v = view.vote;
+        html += `<div class="card"><h3>👻 Your last vote</h3>
+          <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day by not voting.</p>
+          <div class="target-grid">${
+            v.targets.filter(t => !t.self).map(t =>
+              `<button class="btn ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
+          }${v.yourVote ? '<button class="btn ghost" data-vote="retract">↩ Take it back (save for later)</button>' : ''}</div></div>`;
+      } else if (view.phase === 'day' && view.vote && view.vote.ghostSpent) {
+        html += `<p class="progress-note">👻 Your last vote has been spent.</p>`;
+      }
       html += playersListHTML(view.phase === 'day');
       if (view.phase === 'day') html += chatCardHTML();
     }
@@ -589,14 +601,15 @@ const Player = (() => {
         <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
         A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
         <div class="target-grid">${
-          [...v.targets.map(t => ({ id: t.id, label: `${t.avatar || ''} ${esc(t.name)}` })),
+          [...v.targets.map(t => ({ id: t.id, self: t.self, label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}` })),
            { id: 'nobody', label: '🕊 No one' }].map(t => {
             const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
             const count = v.counts[t.id] ? `${v.counts[t.id]} 🗳` : '';
-            return `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">
-              <span class="vote-voters">${votersHere || '&nbsp;'}</span>
-              <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>
-            </button>`;
+            const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
+              <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>`;
+            return t.self
+              ? `<div class="btn vote-line self-row">${inner}</div>`
+              : `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
           }).join('')
         }</div>
         </div>`;
