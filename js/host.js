@@ -95,6 +95,42 @@ const Host = (() => {
     handleJoin(localConn, { t: 'join', name });
   }
 
+  /* ---------------- bot players (for solo testing / filling seats) ----------------
+   * Bots join through loopback connections like the host's own seat, get
+   * dealt roles, and act on a short random delay. */
+
+  const BOT_NAMES = ['🤖 Rita', '🤖 Max', '🤖 Ivy', '🤖 Gus', '🤖 Sal', '🤖 Fay', '🤖 Ned', '🤖 Lou', '🤖 Peg', '🤖 Vic'];
+
+  function addBot() {
+    if (!G || G.phase !== 'lobby' || G.players.length >= 15) return;
+    const name = BOT_NAMES.find(n => !G.players.some(p => p.name === n));
+    if (!name) return;
+    const conn = {
+      open: true,
+      _playerId: null,
+      close() {},
+      send(msg) {
+        if (msg.t !== 'state') return;
+        setTimeout(() => botAct(conn), 700 + Math.random() * 1200);
+      },
+    };
+    handleJoin(conn, { t: 'join', name });
+  }
+
+  function botAct(conn) {
+    if (!G) return;
+    const p = getPlayer(conn._playerId);
+    if (!p || !p.alive) return;
+    if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)) {
+      const ts = nightTargetsFor(p);
+      if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
+    } else if (G.phase === 'day' && !(p.id in G.votes)) {
+      const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
+      opts.push('nobody');
+      handleVote(p, opts[Math.floor(Math.random() * opts.length)]);
+    }
+  }
+
   function destroy() {
     if (peer) { try { peer.destroy(); } catch (e) {} }
     peer = null; G = null; conns = {}; localConn = null;
@@ -475,7 +511,9 @@ const Host = (() => {
           <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
             ${n < MIN_PLAYERS ? `Need at least ${MIN_PLAYERS} players` : `Start game with ${n} players`}
           </button>
-          <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.</p>
+          <button id="btn-add-bot" class="btn" style="margin-top:8px;width:100%">🤖 Add a bot player</button>
+          <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.
+          Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
         </div>`;
     }
 
@@ -515,6 +553,7 @@ const Host = (() => {
     on('btn-force-night', () => { if (confirm('End the night now? Players who haven’t acted will take no action.')) forceEndNight(); });
     on('btn-force-vote', () => { if (confirm('End voting now? Only votes already cast will count.')) forceEndVoting(); });
     on('btn-again', playAgain);
+    on('btn-add-bot', addBot);
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
     });
