@@ -120,16 +120,11 @@ const Host = (() => {
     const conn = {
       open: true,
       _playerId: null,
+      _pending: null,
       close() {},
       send(msg) {
         if (msg.t !== 'state') return;
-        // Humanized pace: power-role night actions take 2-5s, everything
-        // else (confirming, chatting, voting) 1-3s.
-        const v = msg.view;
-        const delay = (v.phase === 'night' && v.night && v.night.prompt)
-          ? 2000 + Math.random() * 3000
-          : 1000 + Math.random() * 2000;
-        setTimeout(() => botAct(conn), delay);
+        scheduleBot(conn);
       },
     };
     handleJoin(conn, { t: 'join', name });
@@ -153,6 +148,24 @@ const Host = (() => {
   ];
 
   const rndOf = a => a[Math.floor(Math.random() * a.length)];
+
+  /* One pending timer per bot. The delay is chosen for the CURRENT phase —
+   * power-role night actions take 2-5s, everything else 1-3s — and if the
+   * phase changes while waiting, the wait restarts, so a timer armed at the
+   * end of one phase can never rush an action at the start of the next. */
+  function scheduleBot(conn) {
+    if (!G || conn._pending) return;
+    const phase = G.phase;
+    const p = getPlayer(conn._playerId);
+    const isPowerNight = phase === 'night' && p && p.alive && ROLES[p.role] && ROLES[p.role].nightPrompt;
+    const delay = isPowerNight ? 2000 + Math.random() * 3000 : 1000 + Math.random() * 2000;
+    conn._pending = setTimeout(() => {
+      conn._pending = null;
+      if (!G) return;
+      if (G.phase !== phase) { scheduleBot(conn); return; }
+      botAct(conn);
+    }, delay);
+  }
 
   /* Role-aware table talk: bots use what they actually know. */
   function botLine(p) {
