@@ -1556,8 +1556,19 @@ const Host = (() => {
       return rndOf(T);
     }
     if (role === 'vigilante') {
-      const sus = suspLeader(4);
-      if (sus && Math.random() < 0.7) return sus;              // only shoot on strong suspicion
+      // Suspicion halves at nightfall, so scores here are already discounted:
+      // 4+ means near-certainty (detective intel, an exposed liar), 2+ means
+      // someone was loudly accused today.
+      const sure = suspLeader(4);
+      if (sure) return sure;
+      const day = G.dayNum, aliveN = alivePlayers().length;
+      const sus = suspLeader(2);
+      if (sus && Math.random() < Math.min(0.9, 0.45 + 0.15 * day)) return sus;
+      // Endgame, or still sitting on ammo late: a hunch beats a wasted bullet.
+      if (aliveN <= 5 || day >= 4) {
+        const hunch = suspLeader(1);
+        if (hunch && Math.random() < 0.75) return hunch;
+      }
       return 'skip';
     }
     if (role === 'watcher' || role === 'tracker') {
@@ -1684,7 +1695,11 @@ const Host = (() => {
   function roleInfoFor(p) {
     const info = [];
     if (p.recruited) info.push('🤝 You have been recruited — you now win with the mafia.');
-    if (p.role === 'vigilante') info.push(p.guilt ? 'Your guilt has holstered your gun for good.' : `Bullets left: ${p.bullets} (usable from Night 2).`);
+    if (p.role === 'vigilante') {
+      if (p.guilt) info.push('Your guilt has holstered your gun for good.');
+      else if (p.bullets <= 0) info.push('No bullets left.');
+      else info.push(`Bullets left: ${p.bullets} (usable from Night 2).${G.dayNum >= 3 && p.bullets >= 2 ? ' They’re no use to a dead man — trust your gut.' : ''}`);
+    }
     if (p.role === 'executioner' && p.execTargetId) {
       info.push(`Your target: ${nameOf(p.execTargetId)}${p.achievedWin ? ' — grudge settled, you win! 🪓' : p.lostWin ? ' — died the wrong way. You lose.' : ''}`);
     }
