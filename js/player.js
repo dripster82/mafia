@@ -23,6 +23,74 @@ const Player = (() => {
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /* ---------------- join diagnostics ---------------- */
+
+  let dlog = [];
+  let lastLoggedPhase = null;
+
+  function dbg(msg) {
+    const t = new Date().toISOString().slice(11, 23);
+    dlog.push(`[${t}] ${msg}`);
+    if (dlog.length > 300) dlog.shift();
+    const box = document.getElementById('debug-log');
+    if (box) { box.textContent = dlog.join('\n'); box.scrollTop = box.scrollHeight; }
+  }
+
+  function debugHeader() {
+    const ver = (document.getElementById('app-version') || {}).textContent || '?';
+    return [
+      `Mafia Night join debug — ${new Date().toISOString()}`,
+      `${ver} | ${location.href}`,
+      `UA: ${navigator.userAgent}`,
+      `online: ${navigator.onLine}`,
+      '',
+    ].join('\n');
+  }
+
+  function debugPanelHTML() {
+    return `<div class="card">
+      <div class="section-title"><h3>🔧 Debug log</h3>
+        <button id="btn-copy-debug" class="btn small">Copy</button></div>
+      <pre id="debug-log" class="debug-log">${esc(dlog.join('\n'))}</pre>
+    </div>`;
+  }
+
+  function wireDebugPanel() {
+    const cp = el('btn-copy-debug');
+    if (cp) cp.onclick = () => {
+      const text = debugHeader() + dlog.join('\n');
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+        .then(() => { cp.textContent = 'Copied!'; setTimeout(() => { cp.textContent = 'Copy'; }, 1500); })
+        .catch(() => { prompt('Copy the debug log:', text); });
+    };
+    const box = el('debug-log');
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+
+  /* Gather ICE candidates against our own server config to learn which
+   * paths this device can use: host (LAN), srflx (STUN), relay (TURN). */
+  function probeIce() {
+    try {
+      const cfg = (window.MAFIA_PEER_CONFIG && window.MAFIA_PEER_CONFIG.config) || PEER_OPTS.config;
+      const pc = new RTCPeerConnection(cfg);
+      const found = new Set();
+      pc.createDataChannel('probe');
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          const m = / typ (\w+)/.exec(e.candidate.candidate);
+          if (m && !found.has(m[1])) { found.add(m[1]); dbg(`ice probe: found ${m[1]} candidate`); }
+        } else {
+          dbg(`ice probe complete: ${found.size ? [...found].join(', ') : 'NO candidates'}${found.has('relay') ? '' : ' — TURN relay NOT reachable'}`);
+          try { pc.close(); } catch (err) {}
+        }
+      };
+      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(e => dbg('ice probe offer failed: ' + e.message));
+      setTimeout(() => { try { pc.close(); } catch (err) {} }, 20000);
+    } catch (e) {
+      dbg('ice probe unavailable: ' + e.message);
+    }
+  }
+
   /* Host-as-player mode: no network — messages loop straight into the game
    * engine running on this same page. */
   function initLocal(name, sendToHost) {
@@ -48,6 +116,10 @@ const Player = (() => {
     myName = name;
     roleRevealed = false;
     investigations = [];
+    dlog = [];
+    dbg(`join requested: room=${roomCode} name=${name}`);
+    dbg(`online=${navigator.onLine} secure=${location.protocol === 'https:'}`);
+    probeIce();
     sessionStorage.setItem('mafia-session', JSON.stringify({
       roomCode, name, playerId: getStoredPlayerId(),
     }));
@@ -74,26 +146,48 @@ const Player = (() => {
     clearTimeout(connectTimer);
     connectTimer = setTimeout(() => {
       if (!connected && !view) {
-        fatal('Couldn’t reach the host after 20 seconds. Make sure both devices are online (Wi-Fi and cellular both work), then try again.');
+        dbg('TIMEOUT: no data channel after 20s');
+        connFail('Couldn’t reach the host after 20 seconds. Make sure both devices are online, then try again.');
       }
     }, 20000);
 
-    peer = new Peer(Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
-    peer.on('open', () => {
+    const opts = Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {});
+    dbg(`creating peer (broker: ${opts.host || '0.peerjs.com (PeerJS cloud)'})`);
+    peer = new Peer(opts);
+    peer.on('open', id => {
+      dbg(`broker connected, our peer id: ${id}`);
+      dbg(`dialing host: ${Host.PEER_PREFIX + roomCode}`);
       conn = peer.connect(Host.PEER_PREFIX + roomCode, { reliable: true });
       conn.on('open', () => {
+        dbg('data channel OPEN — sending join');
         connected = true;
         conn.send({ t: 'join', name: myName, playerId: getStoredPlayerId() });
       });
+      conn.on('iceStateChanged', s => dbg('ice state: ' + s));
       conn.on('data', handleMessage);
-      conn.on('close', () => onLost());
-      conn.on('error', () => onLost());
+      conn.on('close', () => { dbg('data channel closed'); onLost(); });
+      conn.on('error', e => { dbg('conn error: ' + (e && (e.type || e.message) || e)); onLost(); });
+      // Watch the underlying RTCPeerConnection once negotiation begins.
+      setTimeout(() => {
+        const pc = conn && conn.peerConnection;
+        if (!pc) { dbg('no RTCPeerConnection yet (no answer from host?)'); return; }
+        dbg(`pc states: conn=${pc.connectionState} ice=${pc.iceConnectionState} gathering=${pc.iceGatheringState} signaling=${pc.signalingState}`);
+        pc.addEventListener('connectionstatechange', () => dbg('pc connection: ' + pc.connectionState));
+        pc.addEventListener('icegatheringstatechange', () => dbg('pc gathering: ' + pc.iceGatheringState));
+        pc.addEventListener('signalingstatechange', () => dbg('pc signaling: ' + pc.signalingState));
+      }, 2000);
+    });
+    peer.on('disconnected', () => {
+      if (!peer || peer.destroyed) return;
+      dbg('lost broker connection, reconnecting to broker…');
+      try { peer.reconnect(); } catch (e) {}
     });
     peer.on('error', err => {
+      dbg(`peer error: ${err.type} — ${err.message || ''}`);
       if (err.type === 'peer-unavailable') {
-        fatal('No game found with room code ' + roomCode + '. Check the code and that the host is online.');
+        connFail('No game found with room code ' + roomCode + '. Check the code and that the host has the game open right now.');
       } else if (!connected) {
-        fatal('Connection failed (' + err.type + '). Check your internet connection and try again.');
+        connFail('Connection failed (' + err.type + '). Check your internet connection and try again.');
       } else {
         onLost();
       }
@@ -103,6 +197,7 @@ const Player = (() => {
   function onLost() {
     if (local || !peer) return;
     connected = false;
+    dbg('connection lost — retrying in 2.5s');
     render(); // show reconnect banner over last known state
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(connect, 2500);
@@ -123,13 +218,37 @@ const Player = (() => {
     App.showJoinError(msg);
   }
 
+  /* Connection-level failure: stay on this screen with the debug log and a
+   * retry button, instead of bouncing back to the join form. */
+  function connFail(msg) {
+    if (local) return;
+    dbg('FAILED: ' + msg);
+    cleanup(false);
+    const c = el(mount);
+    if (!c) return;
+    c.innerHTML = `<div class="card center">
+        <p class="error">${esc(msg)}</p>
+        <button id="btn-retry" class="btn primary big">Try again</button>
+        <button id="btn-give-up" class="btn link">← Back to join screen</button>
+      </div>` + debugPanelHTML();
+    const r = el('btn-retry');
+    if (r) r.onclick = () => { dbg('--- retry ---'); connect(); };
+    const g = el('btn-give-up');
+    if (g) g.onclick = () => { cleanup(true); App.showScreen('join'); };
+    wireDebugPanel();
+  }
+
   function handleMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'joined') {
-      if (!local) saveSession(msg.playerId);
+      if (!local) { dbg(`JOINED game as player ${msg.playerId}`); saveSession(msg.playerId); }
       const pill = el(pillId);
       if (pill) pill.textContent = 'Room: ' + msg.roomCode;
     } else if (msg.t === 'state') {
+      if (!local && msg.view.phase !== lastLoggedPhase) {
+        lastLoggedPhase = msg.view.phase;
+        dbg(`state received: phase=${msg.view.phase} players=${msg.view.players.length}`);
+      }
       if (msg.view.phase === 'lobby' && (!view || view.phase !== 'lobby')) {
         // A new game is forming — clear leftovers from the previous one.
         investigations = [];
@@ -177,7 +296,12 @@ const Player = (() => {
 
   function renderStatus(text) {
     const c = el(mount);
-    if (c) c.innerHTML = `<div class="card center"><p class="pulsing">${esc(text)}</p></div>`;
+    if (!c) return;
+    // While connecting (never in local/host mode), show the live debug log.
+    const showDebug = !local && !view;
+    c.innerHTML = `<div class="card center"><p class="pulsing">${esc(text)}</p></div>`
+      + (showDebug ? debugPanelHTML() : '');
+    if (showDebug) wireDebugPanel();
   }
 
   function roleCardHTML(roleId, concealable) {
