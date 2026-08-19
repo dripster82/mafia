@@ -950,7 +950,9 @@ const Host = (() => {
   function extraWinners() {
     const out = [];
     G.players.forEach(p => {
-      if (p.role === 'executioner' && p.achievedWin) out.push({ name: p.name, role: p.role, why: 'their grudge was settled 🪓' });
+      if (p.role === 'executioner' && p.achievedWin) {
+        out.push({ name: p.name, role: p.role, why: `their grudge against ${nameOf(p.execTargetId)} was settled — the town voted them out 🪓` });
+      }
       if (p.role === 'drifter' && p.alive) out.push({ name: p.name, role: p.role, why: 'they drifted through alive 🎒' });
     });
     return out;
