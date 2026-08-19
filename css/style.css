@@ -182,6 +182,7 @@ input[type="text"]:focus { border-color: var(--accent); }
 .player-row .role-tag.mafia { color: var(--accent); }
 .player-row .role-tag.town { color: var(--good); }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.skull { flex-shrink: 0; font-size: 0.9rem; }
 .dot.on { background: var(--good); }
 .dot.off { background: var(--accent); }
 
@@ -198,6 +199,8 @@ input[type="text"]:focus { border-color: var(--accent); }
 .role-card .role-team.town { color: var(--good); }
 .role-card .role-desc { color: var(--muted); margin-top: 10px; line-height: 1.5; font-size: 0.92rem; }
 .role-card.concealed { background: repeating-linear-gradient(135deg, #1e2230, #1e2230 12px, #222639 12px, #222639 24px); }
+.role-card.team-mafia { border-color: #6b3038; box-shadow: 0 0 28px rgba(224, 67, 63, 0.22) inset, 0 0 18px rgba(224, 67, 63, 0.18); }
+.role-card.team-town { border-color: #2e5c44; box-shadow: 0 0 28px rgba(76, 175, 125, 0.18) inset, 0 0 18px rgba(76, 175, 125, 0.14); }
 
 /* Target / vote buttons */
 .target-grid { display: flex; flex-direction: column; gap: 8px; }
@@ -234,6 +237,13 @@ input[type="text"]:focus { border-color: var(--accent); }
 
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 .pulsing { animation: pulse 1.6s infinite; }
+
+/* Winner confetti */
+.confetti-box { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 150; }
+.confetti { position: absolute; top: -8%; font-size: 1.25rem; animation: confetti-fall linear infinite; }
+@keyframes confetti-fall {
+  to { transform: translateY(115vh) rotate(540deg); opacity: 0.7; }
+}
 
 /* Day/night phase transition overlay */
 .phase-overlay {

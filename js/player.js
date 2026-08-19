@@ -12,6 +12,7 @@ const Player = (() => {
   let connected = false;
   let reconnectTimer = null;
   let connectTimer = null;
+  let reconnectAttempts = 0;
   let local = false;               // true when this client is the host's own seat
   let mount = 'player-content';    // container the player view renders into
   let pillId = 'player-room-pill';
@@ -208,6 +209,7 @@ const Player = (() => {
   function onLost() {
     if (local || !peer) return;
     connected = false;
+    reconnectAttempts++;
     dbg('connection lost — retrying in 2.5s');
     render(); // show reconnect banner over last known state
     clearTimeout(reconnectTimer);
@@ -252,6 +254,7 @@ const Player = (() => {
   function handleMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'joined') {
+      reconnectAttempts = 0;
       if (!local) { dbg(`JOINED game as player ${msg.playerId}`); saveSession(msg.playerId); }
       const pill = el(pillId);
       if (pill) pill.textContent = 'Room: ' + msg.roomCode;
@@ -324,7 +327,7 @@ const Player = (() => {
         <div class="role-desc">Tap to reveal — make sure no one is looking!</div>
       </div>`;
     }
-    return `<div id="role-card" class="role-card">
+    return `<div id="role-card" class="role-card team-${r.team}">
       <div class="role-icon">${r.icon}</div>
       <div class="role-name">${r.name}</div>
       <div class="role-team ${r.team}">Team ${r.team === 'mafia' ? 'Mafia' : 'Town'}</div>
@@ -341,7 +344,7 @@ const Player = (() => {
         const votes = withVotes && counts[p.id] ? `<span class="vote-count">${counts[p.id]} 🗳</span>` : '';
         const dead = !p.alive ? `<span class="status">${p.causeOfDeath === 'vote' ? 'voted out' : 'killed'}</span>` : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
-          <span class="dot ${p.connected ? 'on' : 'off'}"></span>
+          ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : '<span class="skull">💀</span>'}
           <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
           ${role}${votes}${dead}</div>`;
       }).join('')
@@ -425,7 +428,9 @@ const Player = (() => {
     let html = '';
 
     if (!connected) {
-      html += `<div class="banner death pulsing"><p>⚠️ Connection lost — trying to reconnect…</p></div>`;
+      html += `<div class="banner death pulsing"><p>⚠️ Connection lost — trying to reconnect…${
+        reconnectAttempts > 3 ? '<br><span class="small-text muted">Still no luck — check the host’s screen is on with the game open.</span>' : ''
+      }</p></div>`;
     }
 
     /* ----- lobby ----- */
@@ -440,6 +445,7 @@ const Player = (() => {
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
       html += profileCardHTML();
+      html += chatCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
           <div class="muted small-text">Invite others — scan to join room <strong>${esc(view.roomCode)}</strong></div>
@@ -511,7 +517,10 @@ const Player = (() => {
 
       const n = view.night;
       if (n.mates && n.mates.length) {
-        html += `<div class="card"><h3>🔪 Your fellow mafia</h3><p>${n.mates.map(esc).join(', ')}</p></div>`;
+        html += `<div class="card"><h3>🔪 Your fellow mafia</h3>${
+          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)} — ${
+            m.pick ? `targeting <strong>${esc(m.pick)}</strong>` : '<span class="muted">deciding…</span>'}</p>`).join('')
+        }<p class="hint">Agree on one target — a split vote picks randomly among the top choices.</p></div>`;
       }
       html += investigationsHTML();
 
@@ -539,7 +548,8 @@ const Player = (() => {
       html += `<div class="card">
         <div class="section-title"><h3>Vote to eliminate</h3>
         <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-        <p class="muted small-text" style="margin-bottom:10px">Discuss out loud, then cast your vote. You can change it until everyone has voted.</p>
+        <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
+        A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
         <div class="target-grid">${
           [...v.targets.map(t => ({ id: t.id, label: `${t.avatar || ''} ${esc(t.name)}` })),
            { id: 'nobody', label: '🕊 No one' }].map(t => {
@@ -558,6 +568,15 @@ const Player = (() => {
     /* ----- game over ----- */
     else if (view.phase === 'ended') {
       const won = (view.winner === 'mafia') === (ROLES[view.you.role].team === 'mafia');
+      if (won) {
+        let pieces = '';
+        for (let i = 0; i < 36; i++) {
+          pieces += `<span class="confetti" style="left:${(Math.random() * 100).toFixed(1)}%;
+            animation-duration:${(2.5 + Math.random() * 3).toFixed(2)}s;
+            animation-delay:${(Math.random() * 2.5).toFixed(2)}s">${['🎉', '✨', '🎊'][i % 3]}</span>`;
+        }
+        html += `<div class="confetti-box" aria-hidden="true">${pieces}</div>`;
+      }
       html += `<div class="banner win"><span class="big-emoji">${view.winner === 'town' ? '🎉' : '🔪'}</span>
         <h2>${view.winner === 'town' ? 'The town wins!' : 'The mafia win!'}</h2>
         <p>${won ? 'Your team won! 🏆' : 'Your team lost this time.'}

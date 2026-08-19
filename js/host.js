@@ -296,9 +296,10 @@ const Host = (() => {
     if (msg.t === 'chat') return handleChat(p, msg.text);
   }
 
-  /* Day-phase table talk. Only living players may speak; everyone reads. */
+  /* Table talk: lobby (waiting banter) and day (discussion). Only living
+   * players may speak; everyone reads. */
   function handleChat(p, text) {
-    if (G.phase !== 'day' || !p.alive) return;
+    if ((G.phase !== 'day' && G.phase !== 'lobby') || !p.alive) return;
     text = String(text || '').trim().slice(0, 200);
     if (!text) return;
     G.chat.push({ name: p.name, avatar: p.avatar, text });
@@ -677,10 +678,18 @@ const Host = (() => {
         prompt,
         targets: prompt ? nightTargetsFor(p).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })) : [],
         mates: p.role === 'mafia'
-          ? aliveMafia().filter(m => m.id !== p.id).map(m => m.name)
+          ? aliveMafia().filter(m => m.id !== p.id).map(m => ({
+              name: m.name, avatar: m.avatar,
+              pick: G.night.actions[m.id] ? nameOf(G.night.actions[m.id]) : null,
+            }))
           : null,
         waitingOn: nightActors().filter(a => !(a.id in G.night.actions)).length,
       };
+    }
+
+    if (G.phase === 'lobby') {
+      view.chat = G.chat.slice(-50);
+      view.canChat = true;
     }
 
     if (G.phase === 'day') {
@@ -697,6 +706,7 @@ const Host = (() => {
         voters: settings.showVoters ? voters : null,
         voted: Object.keys(G.votes).length,
         needed: alivePlayers().length,
+        majority: Math.floor(alivePlayers().length / 2) + 1,
         targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })),
       };
       view.chat = G.chat.slice(-50);
