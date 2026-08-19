@@ -176,7 +176,7 @@ const Host = (() => {
     if (!text) return;
     G.chat.push({ name: p.name, avatar: p.avatar, text });
     if (G.chat.length > 100) G.chat = G.chat.slice(-100);
-    if (G.phase === 'day') reactToChat(p, text);
+    if (G.phase === 'day') { G.lastChatAt = Date.now(); reactToChat(p, text); }
     broadcast();
   }
 
@@ -1093,6 +1093,7 @@ const Host = (() => {
     G.votes = {};
     G.ghostSaves = {};
     G.voteClosing = false;
+    G.lastChatAt = Date.now(); // bots hold their votes until the table goes quiet
     setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
     broadcast();
@@ -1636,6 +1637,7 @@ const Host = (() => {
     // Dead bots decide their ghost vote: cast it on a strong lead, else save it.
     if (!p.alive) {
       if (G.phase === 'day' && ghostCanVote(p) && !(p.id in G.votes) && !G.ghostSaves[p.id]) {
+        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
         const known = p.intel && p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
         const pick = (known && known.length) ? known[0] : botSuspicionPick(p, 3);
         if (pick && Math.random() < 0.7) handleVote(p, pick.id);
@@ -1657,8 +1659,11 @@ const Host = (() => {
         return;
       }
       if (!(p.id in G.votes)) {
-        // Vote what was said at the table; only decide fresh if the bot never
-        // spoke today or its declared target has since died.
+        // Votes wait until the table has been quiet for a while, so they're
+        // cast on everything that was said — not on first impressions.
+        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        // Start from what the bot declared at the table; decide fresh if it
+        // never spoke today or its declared target has since died.
         let target = null;
         const ci = p.chatIntent;
         if (ci && ci.day === G.dayNum) {
@@ -1669,6 +1674,20 @@ const Host = (() => {
           }
         }
         if (!target) target = botVoteTarget(p) || 'nobody';
+        // The discussion may have moved things on since the bot spoke: if a
+        // clearly stronger suspect emerged, switch — and say so, to keep the
+        // vote and the table talk in step.
+        const fresh = botSuspicionPick(p, 2);
+        if (fresh && fresh.id !== target &&
+            suspOf(p, fresh.id) >= (target === 'nobody' ? 3 : suspOf(p, target) + 3)) {
+          p.chatIntent = { day: G.dayNum, target: fresh.id };
+          handleChat(p, rndOf([
+            `Hearing all that… my vote's going to ${fresh.name}.`,
+            `Actually — it's ${fresh.name}. I'm sure now.`,
+            `Fine, you've convinced me. ${fresh.name}.`,
+          ]));
+          target = fresh.id;
+        }
         handleVote(p, target);
       }
     }
