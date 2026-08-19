@@ -17,9 +17,23 @@ const App = (() => {
 
   function init() {
     el('btn-go-host').onclick = () => {
-      showScreen('host');
-      Host.create();
+      el('host-error').classList.add('hidden');
+      showScreen('host-setup');
+      el('host-name').focus();
     };
+
+    function doCreate() {
+      const name = el('host-name').value.trim();
+      if (!name) {
+        el('host-error').textContent = 'Please enter your name.';
+        el('host-error').classList.remove('hidden');
+        return;
+      }
+      showScreen('host');
+      Host.create(name);
+    }
+    el('btn-create-game').onclick = doCreate;
+    el('host-name').addEventListener('keydown', e => { if (e.key === 'Enter') doCreate(); });
 
     el('btn-go-join').onclick = () => {
       el('join-error').classList.add('hidden');

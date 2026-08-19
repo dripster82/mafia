@@ -12,17 +12,17 @@ host except to the player who owns them.
 
 ## Playing
 
-1. Open the site on the host device and tap **Host a game** — you get a 5-letter room code.
+1. Open the site on the host device, tap **Host a game**, and enter your name — you get a 5-letter room code. The host plays too; the app itself is the neutral operator.
 2. Everyone else opens the same site, taps **Join a game**, and enters the code and their name.
-3. The host taps **Start game** (4+ players). Everyone secretly receives a role — tap the card to peek.
+3. The host taps **Start game** (4+ players including the host). Everyone secretly receives a role — tap the card to peek.
 4. **Night:** the Mafia pick a victim, the Doctor picks someone to protect, the Detective investigates someone. Villagers sleep.
 5. **Day:** everyone learns who died (or was saved), discusses out loud, then votes to eliminate someone — or no one. Ties eliminate no one.
 6. Repeat until the town eliminates all mafia, or the mafia equal the rest of the town.
 
-Roles stay hidden until a player dies or the game ends. Dead players spectate.
-The host is a neutral operator with a live progress view, force-advance controls
-for stuck players, and an optional operator-only role reveal. To play as well,
-the host can join from a second tab or device.
+Roles stay hidden until a player dies or the game ends — including from the
+host, who plays like everyone else. Dead players spectate. The host's screen
+adds a small controls panel (start, force-advance for stuck players, kick in
+the lobby, play again) showing only public information.
 
 ### Roles
 

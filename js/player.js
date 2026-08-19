@@ -11,11 +11,34 @@ const Player = (() => {
   let investigations = []; // {name, isMafia}
   let connected = false;
   let reconnectTimer = null;
+  let local = false;               // true when this client is the host's own seat
+  let mount = 'player-content';    // container the player view renders into
+  let pillId = 'player-room-pill';
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  /* Host-as-player mode: no network — messages loop straight into the game
+   * engine running on this same page. */
+  function initLocal(name, sendToHost) {
+    clearTimeout(reconnectTimer);
+    local = true;
+    mount = 'host-player-area';
+    pillId = 'host-room-pill';
+    myName = name;
+    view = null;
+    roleRevealed = false;
+    investigations = [];
+    connected = true;
+    conn = { open: true, send: sendToHost };
+  }
+
+  function receiveLocal(msg) { handleMessage(msg); }
+
   function join(code, name) {
+    local = false;
+    mount = 'player-content';
+    pillId = 'player-room-pill';
     roomCode = code.toUpperCase();
     myName = name;
     roleRevealed = false;
@@ -64,7 +87,7 @@ const Player = (() => {
   }
 
   function onLost() {
-    if (!peer) return;
+    if (local || !peer) return;
     connected = false;
     render(); // show reconnect banner over last known state
     clearTimeout(reconnectTimer);
@@ -80,6 +103,7 @@ const Player = (() => {
   }
 
   function fatal(msg) {
+    if (local) return; // loopback errors can't occur; never bounce the host out
     cleanup(true);
     App.showJoinError(msg);
   }
@@ -87,8 +111,9 @@ const Player = (() => {
   function handleMessage(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'joined') {
-      saveSession(msg.playerId);
-      el('player-room-pill').textContent = 'Room: ' + msg.roomCode;
+      if (!local) saveSession(msg.playerId);
+      const pill = el(pillId);
+      if (pill) pill.textContent = 'Room: ' + msg.roomCode;
     } else if (msg.t === 'state') {
       if (msg.view.phase === 'lobby' && (!view || view.phase !== 'lobby')) {
         // A new game is forming — clear leftovers from the previous one.
@@ -110,8 +135,8 @@ const Player = (() => {
   /* ---------------- rendering ---------------- */
 
   function renderStatus(text) {
-    el('player-content').innerHTML =
-      `<div class="card center"><p class="pulsing">${esc(text)}</p></div>`;
+    const c = el(mount);
+    if (c) c.innerHTML = `<div class="card center"><p class="pulsing">${esc(text)}</p></div>`;
   }
 
   function roleCardHTML(roleId, concealable) {
@@ -178,7 +203,8 @@ const Player = (() => {
 
   function render() {
     if (!view) { renderStatus('Connecting to the game…'); return; }
-    const c = el('player-content');
+    const c = el(mount);
+    if (!c) return;
     let html = '';
 
     if (!connected) {
@@ -189,7 +215,7 @@ const Player = (() => {
     if (view.phase === 'lobby') {
       html += `<div class="banner night"><span class="big-emoji">🛋</span>
         <h2>You're in, ${esc(view.you.name)}!</h2>
-        <p class="muted">Waiting for the host to start the game.</p>
+        <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}</div>`;
       html += playersListHTML(false);
     }
@@ -287,5 +313,5 @@ const Player = (() => {
     return false;
   }
 
-  return { join, cleanup, tryResume };
+  return { join, cleanup, tryResume, initLocal, receiveLocal };
 })();

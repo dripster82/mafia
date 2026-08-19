@@ -1,5 +1,8 @@
-/* Host: authoritative game engine + operator UI.
- * The host device runs the game; players connect to it via WebRTC (PeerJS). */
+/* Host: authoritative game engine + operator controls.
+ * The host device runs the game; players connect to it via WebRTC (PeerJS).
+ * The host is also a player — their client attaches through an in-memory
+ * loopback connection, and the app itself acts as the neutral operator.
+ * The host UI must therefore never reveal hidden information. */
 
 const Host = (() => {
   const PEER_PREFIX = 'mafia-night-v1-';
@@ -7,9 +10,10 @@ const Host = (() => {
 
   let peer = null;
   let roomCode = null;
-  let conns = {};   // playerId -> DataConnection
-  let G = null;     // game state
-  let showRoles = false;
+  let conns = {};      // playerId -> DataConnection (or the local loopback)
+  let localConn = null; // the host's own loopback connection
+  let hostName = null;
+  let G = null;        // game state
 
   /* ---------------- state ---------------- */
 
@@ -18,11 +22,11 @@ const Host = (() => {
       phase: 'lobby',      // lobby | night | day | ended
       dayNum: 0,
       players: [],         // {id, name, role, alive, connected, causeOfDeath}
-      night: null,         // {actions: {playerId: targetId}, resolved}
+      night: null,         // {actions: {playerId: targetId}}
       votes: null,         // {playerId: targetId|'nobody'}
       announce: null,      // latest event to show players
       winner: null,
-      log: [],
+      log: [],             // public information only — the host can read this
     };
   }
 
@@ -37,11 +41,19 @@ const Host = (() => {
 
   /* ---------------- lifecycle ---------------- */
 
-  function create() {
+  function create(name) {
+    hostName = String(name || '').trim().slice(0, 16) || 'Host';
     roomCode = '';
     for (let i = 0; i < 5; i++) roomCode += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
     G = freshGame();
     conns = {};
+
+    // The host screen holds two areas: our controls, and the host's own
+    // player view (rendered by the Player module through the loopback).
+    document.getElementById('host-content').innerHTML =
+      '<div id="host-player-area"></div><div id="host-controls-area"></div>';
+
+    attachLocalPlayer(hostName);
 
     peer = new Peer(PEER_PREFIX + roomCode, Object.assign({ debug: 1 }, window.MAFIA_PEER_CONFIG || {}));
     peer.on('open', () => {
@@ -57,7 +69,7 @@ const Host = (() => {
       if (err.type === 'unavailable-id') {
         // Code collision — extremely unlikely, just pick another.
         peer.destroy();
-        create();
+        create(hostName);
       } else if (err.type !== 'peer-unavailable') {
         renderFatal('Connection error: ' + err.type + '. Refresh to try again.');
       }
@@ -70,9 +82,22 @@ const Host = (() => {
     render();
   }
 
+  /* The host's own seat: a fake connection that loops straight into the
+   * Player module on this same page. */
+  function attachLocalPlayer(name) {
+    localConn = {
+      open: true,
+      send: msg => Player.receiveLocal(msg),
+      close: () => {},
+      _playerId: null,
+    };
+    Player.initLocal(name, msg => handleMessage(localConn, msg));
+    handleJoin(localConn, { t: 'join', name });
+  }
+
   function destroy() {
     if (peer) { try { peer.destroy(); } catch (e) {} }
-    peer = null; G = null; conns = {};
+    peer = null; G = null; conns = {}; localConn = null;
   }
 
   /* ---------------- messaging ---------------- */
@@ -177,10 +202,10 @@ const Host = (() => {
     G.night.actions[p.id] = targetId;
 
     // A detective learns the result as soon as they investigate.
+    // (Kept out of the game log — the host is a player and must not see it.)
     if (p.role === 'detective') {
       const target = getPlayer(targetId);
       send(p.id, { t: 'investigation', name: target.name, isMafia: target.role === 'mafia' });
-      addLog(`The detective investigated ${target.name}.`);
     }
 
     maybeResolveNight();
@@ -331,6 +356,7 @@ const Host = (() => {
 
   function kickPlayer(id) {
     if (G.phase !== 'lobby') return;
+    if (localConn && id === localConn._playerId) return; // the host can't kick themself
     const c = conns[id];
     if (c) { try { c.send({ t: 'error', fatal: true, msg: 'You were removed from the lobby by the host.' }); c.close(); } catch (e) {} }
     delete conns[id];
@@ -402,28 +428,16 @@ const Host = (() => {
     return view;
   }
 
-  /* ---------------- host UI ---------------- */
+  /* ---------------- host controls UI ----------------
+   * The host plays through the Player view above these controls, so this
+   * panel shows only public information: counts, the code, and buttons. */
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function renderFatal(msg) {
-    el('host-content').innerHTML = `<div class="card center"><p class="error">${esc(msg)}</p></div>`;
-  }
-
-  function playerRowHTML(p, opts = {}) {
-    const roleKnown = showRoles || !p.alive || G.phase === 'ended';
-    const role = p.role && roleKnown && G.phase !== 'lobby'
-      ? `<span class="role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>` : '';
-    const status = !p.alive
-      ? `<span class="status">${p.causeOfDeath === 'vote' ? 'voted out' : 'killed'}</span>`
-      : (opts.status || '');
-    const kick = opts.kick ? `<button class="btn small ghost" data-kick="${p.id}">✕</button>` : '';
-    return `<div class="player-row ${p.alive ? '' : 'dead'}">
-      <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-      <span class="name">${esc(p.name)}</span>
-      ${role} ${status} ${kick}
-    </div>`;
+    const c = el('host-controls-area');
+    if (c) c.innerHTML = `<div class="card center"><p class="error">${esc(msg)}</p></div>`;
   }
 
   function logHTML() {
@@ -433,13 +447,10 @@ const Host = (() => {
     }</div></div>`;
   }
 
-  function rolesToggleHTML() {
-    return `<button id="btn-toggle-roles" class="btn small ghost">${showRoles ? '🙈 Hide roles' : '👁 Reveal roles (operator only)'}</button>`;
-  }
-
   function render() {
     if (!G) return;
-    const c = el('host-content');
+    const c = el('host-controls-area');
+    if (!c) return;
     const joinURL = location.origin + location.pathname;
 
     let html = '';
@@ -454,80 +465,57 @@ const Host = (() => {
           <div class="code">${roomCode || '·····'}</div>
         </div>
         <div class="card">
-          <div class="section-title"><h3>Players (${n})</h3>
+          <div class="section-title"><h3>Host controls</h3>
             <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n)) : `need ${MIN_PLAYERS - n} more`}</span></div>
-          <div class="player-list">${G.players.map(p => playerRowHTML(p, { kick: true })).join('') || '<p class="muted">Waiting for players to join…</p>'}</div>
-        </div>
-        <button id="btn-start" class="btn primary big" ${n < MIN_PLAYERS ? 'disabled' : ''}>
-          ${n < MIN_PLAYERS ? `Need at least ${MIN_PLAYERS} players` : `Start game with ${n} players`}
-        </button>
-        <p class="hint">The host is the neutral operator and doesn’t play. To play yourself, also join from another tab or device.</p>`;
+          <div class="player-list">${G.players.map(p => `
+            <div class="player-row">
+              <span class="dot ${p.connected ? 'on' : 'off'}"></span>
+              <span class="name">${esc(p.name)}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
+              ${localConn && p.id === localConn._playerId ? '' : `<button class="btn small ghost" data-kick="${p.id}">✕</button>`}
+            </div>`).join('')}</div>
+          <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
+            ${n < MIN_PLAYERS ? `Need at least ${MIN_PLAYERS} players` : `Start game with ${n} players`}
+          </button>
+          <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.</p>
+        </div>`;
     }
 
     if (G.phase === 'night') {
-      const pending = nightActors().filter(p => !(p.id in G.night.actions));
+      const pending = nightActors().filter(p => !(p.id in G.night.actions)).length;
       html += `
-        <div class="banner night"><span class="big-emoji">🌙</span>
-          <h2>Night ${G.dayNum}</h2>
-          <p class="muted">${pending.length === 0 ? 'Resolving…' : `Waiting for ${pending.length} player${pending.length > 1 ? 's' : ''} to act…`}</p>
-        </div>
         <div class="card">
-          <div class="section-title"><h3>Players</h3>${rolesToggleHTML()}</div>
-          <div class="player-list">${G.players.map(p => {
-            const needsAct = p.alive && ROLES[p.role].nightPrompt;
-            const done = p.id in G.night.actions;
-            return playerRowHTML(p, { status: needsAct ? `<span class="status">${done ? '✅ done' : '⏳ acting'}</span>` : (p.alive ? '<span class="status">😴 asleep</span>' : '') });
-          }).join('')}</div>
-        </div>
-        <button id="btn-force-night" class="btn warn">⏭ End night now (skip missing actions)</button>`;
+          <h3>Host controls</h3>
+          <p class="muted small-text" style="margin:6px 0 10px">${
+            pending === 0 ? 'Resolving the night…' : `Waiting for ${pending} player${pending > 1 ? 's' : ''} to act.`}</p>
+          <button id="btn-force-night" class="btn" style="width:100%">⏭ End night now (skip missing actions)</button>
+        </div>`;
     }
 
     if (G.phase === 'day') {
-      const a = G.announce;
-      html += `<div class="banner ${a && a.killedName ? 'death' : 'day'}"><span class="big-emoji">☀️</span>
-        <h2>Day ${G.dayNum}</h2>
-        <p>${a && a.killedName
-          ? `<strong>${esc(a.killedName)}</strong> was killed in the night — they were the <strong>${ROLES[a.killedRole].name}</strong>.`
-          : a && a.saved ? 'The mafia struck, but the doctor saved their target! No one died.' : 'No one died in the night.'}</p>
-      </div>`;
-      const counts = {};
-      Object.values(G.votes).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
       html += `
         <div class="card">
-          <div class="section-title"><h3>Voting (${Object.keys(G.votes).length}/${alivePlayers().length})</h3>${rolesToggleHTML()}</div>
-          <div class="player-list">${G.players.map(p => playerRowHTML(p, {
-            status: p.alive ? `<span class="status">${p.id in G.votes ? '🗳 voted' : '…'}${counts[p.id] ? ` · ${counts[p.id]} vote${counts[p.id] > 1 ? 's' : ''} against` : ''}</span>` : '',
-          })).join('')}</div>
-          ${counts.nobody ? `<p class="muted small-text" style="margin-top:8px">🕊 ${counts.nobody} vote${counts.nobody > 1 ? 's' : ''} for no one</p>` : ''}
-        </div>
-        <button id="btn-force-vote" class="btn warn">⏭ End voting now (count votes cast)</button>`;
+          <h3>Host controls</h3>
+          <p class="muted small-text" style="margin:6px 0 10px">Votes cast: ${Object.keys(G.votes).length}/${alivePlayers().length}.</p>
+          <button id="btn-force-vote" class="btn" style="width:100%">⏭ End voting now (count votes cast)</button>
+        </div>`;
     }
 
     if (G.phase === 'ended') {
-      html += `<div class="banner win"><span class="big-emoji">${G.winner === 'town' ? '🎉' : '🔪'}</span>
-        <h2>${G.winner === 'town' ? 'The town wins!' : 'The mafia win!'}</h2>
-        <p class="muted">All roles are now revealed.</p></div>
-        <div class="card"><h3>Final roles</h3>
-        <div class="player-list">${G.players.map(p => `
-          <div class="player-row ${p.alive ? '' : 'dead'}">
-            <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-            <span class="name">${esc(p.name)}</span>
-            <span class="role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>
-            <span class="status">${p.alive ? 'survived' : (p.causeOfDeath === 'vote' ? 'voted out' : 'killed')}</span>
-          </div>`).join('')}</div></div>
-        <button id="btn-again" class="btn primary big">Play again with connected players</button>`;
+      html += `
+        <div class="card">
+          <h3>Host controls</h3>
+          <button id="btn-again" class="btn primary big" style="width:100%;margin-top:8px">Play again with connected players</button>
+        </div>`;
     }
 
     html += logHTML();
     c.innerHTML = html;
 
-    // wire up controls
     const on = (id, fn) => { const b = el(id); if (b) b.onclick = fn; };
     on('btn-start', startGame);
     on('btn-force-night', () => { if (confirm('End the night now? Players who haven’t acted will take no action.')) forceEndNight(); });
     on('btn-force-vote', () => { if (confirm('End voting now? Only votes already cast will count.')) forceEndVoting(); });
     on('btn-again', playAgain);
-    on('btn-toggle-roles', () => { showRoles = !showRoles; render(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
     });
