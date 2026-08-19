@@ -117,7 +117,7 @@ const Host = (() => {
     };
     handleJoin(conn, { t: 'join', name });
     const bot = getPlayer(conn._playerId);
-    if (bot) { bot.avatar = '🤖'; broadcast(); }
+    if (bot) { bot.avatar = '🤖'; bot.isBot = true; broadcast(); }
   }
 
   function botAct(conn) {
@@ -172,6 +172,7 @@ const Host = (() => {
     if (msg.t === 'vote') return handleVote(p, msg.target);
     if (msg.t === 'profile') return handleProfile(p, msg);
     if (msg.t === 'confirm') return handleConfirm(p);
+    if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
   }
 
   /* Lobby-only: rename and avatar changes. */
@@ -244,6 +245,22 @@ const Host = (() => {
     addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length)}).`, true);
     G.phase = 'reveal';
     G.confirms = {};
+    broadcast();
+  }
+
+  /* True when p is the only human in the game — a solo test against bots. */
+  function soloHuman(p) {
+    return !p.isBot && G.players.every(pl => pl.id === p.id || pl.isBot);
+  }
+
+  /* Solo tests only: swap roles with a bot so the human can try any role. */
+  function handlePickRole(p, roleId) {
+    if (G.phase !== 'reveal' || G.confirms[p.id] || !soloHuman(p)) return;
+    if (!ROLES[roleId] || p.role === roleId) return;
+    const other = G.players.find(pl => pl.id !== p.id && pl.role === roleId);
+    if (!other) return;
+    other.role = p.role;
+    p.role = roleId;
     broadcast();
   }
 
@@ -421,7 +438,7 @@ const Host = (() => {
     G = freshGame();
     G.players = keep.map(p => ({
       id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
-      avatar: p.avatar,
+      avatar: p.avatar, isBot: p.isBot,
     }));
     addLog('New game — waiting for the host to start.');
     broadcast();
@@ -476,6 +493,7 @@ const Host = (() => {
       view.reveal = {
         confirmed: !!G.confirms[p.id],
         waitingOn: G.players.filter(pl => !G.confirms[pl.id]).length,
+        canPickRole: soloHuman(p),
       };
     }
 

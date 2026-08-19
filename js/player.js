@@ -287,6 +287,13 @@ const Player = (() => {
         <h2>The roles are dealt</h2>
         <p class="muted">Tap your card to secretly view your role, then confirm you're ready.</p></div>`;
       html += roleCardHTML(view.you.role, true);
+      if (!view.reveal.confirmed && view.reveal.canPickRole) {
+        html += `<div class="card"><h3>🧪 Solo test — choose your role</h3>
+          <p class="muted small-text" style="margin-bottom:10px">Everyone else is a bot, so you can pick the role you want to try.</p>
+          <div class="row-actions">${Object.keys(ROLES).map(r =>
+            `<button class="btn ${view.you.role === r ? 'selected' : ''}" data-pick-role="${r}">${ROLES[r].icon} ${ROLES[r].name}</button>`).join('')}
+          </div></div>`;
+      }
       if (view.reveal.confirmed) {
         html += `<div class="card center"><p class="pulsing">✅ Ready. Waiting for ${view.reveal.waitingOn} more player${view.reveal.waitingOn === 1 ? '' : 's'}…</p></div>`;
       } else {
@@ -389,6 +396,9 @@ const Player = (() => {
     });
     const cr = el('btn-confirm-role');
     if (cr) cr.onclick = () => sendAction({ t: 'confirm' });
+    c.querySelectorAll('[data-pick-role]').forEach(b => {
+      b.onclick = () => sendAction({ t: 'pickRole', role: b.dataset.pickRole });
+    });
   }
 
   /* Resume a session after a page refresh, if one exists. */

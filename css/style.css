@@ -180,7 +180,11 @@ input[type="text"]:focus { border-color: var(--accent); }
 .progress-note { text-align: center; color: var(--muted); font-size: 0.9rem; }
 
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.row-actions .btn { flex: 1; }
+.row-actions .btn { flex: 1 1 40%; }
+
+/* The host's own player view gets the same stacked layout as .content */
+#host-player-area, #host-controls-area { display: flex; flex-direction: column; gap: 14px; }
+#btn-confirm-role { display: block; width: 100%; }
 
 .section-title { display: flex; justify-content: space-between; align-items: baseline; }
 
