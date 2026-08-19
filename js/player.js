@@ -17,6 +17,7 @@ const Player = (() => {
   let nameDraft = null;            // in-progress lobby rename, survives re-renders
   let toastMsg = null;             // transient message from the host (e.g. name taken)
   let toastTimer = null;
+  let chatDraft = '';              // in-progress chat message, survives re-renders
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -201,6 +202,22 @@ const Player = (() => {
     }</div></div>`;
   }
 
+  /* Day-phase table talk. */
+  function chatCardHTML() {
+    if (!view.chat) return '';
+    return `<div class="card"><h3>💬 Table talk</h3>
+      <div id="chat-log" class="chat-log">${
+        view.chat.length
+          ? view.chat.map(m => `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+          : '<p class="muted small-text">No one has said anything yet…</p>'
+      }</div>
+      ${view.canChat ? `<div class="chat-row">
+        <input id="chat-input" type="text" maxlength="200" placeholder="Say something…" autocomplete="off" value="${esc(chatDraft)}">
+        <button id="chat-send" class="btn">Send</button>
+      </div>` : '<p class="muted small-text">The dead may listen, but not speak.</p>'}
+    </div>`;
+  }
+
   /* Lobby-only: rename yourself and pick an avatar. */
   function profileCardHTML() {
     const av = view.you.avatar;
@@ -224,6 +241,10 @@ const Player = (() => {
         return `<div class="banner death"><span class="big-emoji">💀</span>
           <p><strong>${esc(a.killedName)}</strong> was killed in the night.<br>
           They were the <strong>${ROLES[a.killedRole].name}</strong>.</p></div>`;
+      }
+      if (a.woundedName) {
+        return `<div class="banner death"><span class="big-emoji">🩹</span>
+          <p><strong>${esc(a.woundedName)}</strong> was wounded in the night — but survived!</p></div>`;
       }
       return `<div class="banner day"><span class="big-emoji">${a.saved ? '💉' : '🌤'}</span>
         <p>${a.saved ? 'The mafia struck, but the doctor saved their target — no one died!' : 'No one died in the night.'}</p></div>`;
@@ -260,7 +281,9 @@ const Player = (() => {
       html += `<div class="banner night"><span class="big-emoji">🛋</span>
         <h2>You're in, ${esc(view.you.name)}!</h2>
         <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
-        ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}</div>`;
+        ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}
+        ${view.settings ? `<p class="muted small-text">First night: ${view.settings.safeFirstNight ? 'no deaths' : 'normal'} ·
+          Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}</p>` : ''}</div>`;
       html += profileCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
@@ -279,6 +302,7 @@ const Player = (() => {
         <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
       html += playersListHTML(view.phase === 'day');
+      if (view.phase === 'day') html += chatCardHTML();
     }
 
     /* ----- role confirmation before the first night ----- */
@@ -343,7 +367,15 @@ const Player = (() => {
             <span>${t.avatar || ''} ${esc(t.name)}</span>${v.counts[t.id] ? `<span class="vote-count">${v.counts[t.id]} 🗳</span>` : ''}</button>`).join('')
         }<button class="btn ${v.yourVote === 'nobody' ? 'selected' : ''}" data-vote="nobody">
           <span>🕊 No one</span>${v.counts.nobody ? `<span class="vote-count">${v.counts.nobody} 🗳</span>` : ''}</button>
-        </div></div>`;
+        </div>
+        ${v.voters && Object.keys(v.voters).length ? `<div class="voter-breakdown">${
+          Object.entries(v.voters).map(([t, names]) => {
+            const target = t === 'nobody' ? '🕊 No one' : (() => { const tp = view.players.find(p => p.id === t); return tp ? `${tp.avatar || ''} ${esc(tp.name)}` : '?'; })();
+            return `<div class="small-text muted">${target} ← ${names.map(esc).join(', ')}</div>`;
+          }).join('')
+        }</div>` : ''}
+        </div>`;
+      html += chatCardHTML();
     }
 
     /* ----- game over ----- */
@@ -357,13 +389,38 @@ const Player = (() => {
       html += playersListHTML(false);
     }
 
-    // Keep the profile name input alive across re-renders (broadcasts arrive
-    // whenever anyone joins or changes profile).
+    // Keep text inputs alive across re-renders (broadcasts arrive whenever
+    // anyone joins, changes profile, chats, or votes).
     const prevInput = document.getElementById('profile-name');
     const wasFocused = prevInput && document.activeElement === prevInput;
     const selStart = wasFocused ? prevInput.selectionStart : 0;
+    const prevChat = document.getElementById('chat-input');
+    const chatFocused = prevChat && document.activeElement === prevChat;
+    const chatSel = chatFocused ? prevChat.selectionStart : 0;
 
     c.innerHTML = html;
+
+    const sendChat = () => {
+      const ci = el('chat-input');
+      if (!ci || !ci.value.trim()) return;
+      sendAction({ t: 'chat', text: ci.value });
+      chatDraft = '';
+      ci.value = '';
+      ci.focus();
+    };
+    const ci = el('chat-input');
+    if (ci) {
+      ci.oninput = () => { chatDraft = ci.value; };
+      ci.onkeydown = e => { if (e.key === 'Enter') sendChat(); };
+      if (chatFocused) {
+        ci.focus();
+        try { ci.setSelectionRange(chatSel, chatSel); } catch (e) {}
+      }
+    }
+    const cs = el('chat-send');
+    if (cs) cs.onclick = sendChat;
+    const cl = el('chat-log');
+    if (cl) cl.scrollTop = cl.scrollHeight;
 
     const saveProfileName = () => {
       const pn = el('profile-name');

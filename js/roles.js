@@ -42,15 +42,16 @@ const AVATARS = ['🦊', '🐻', '🐼', '🐸', '🐯', '🦁', '🐮', '🐷',
                  '🐨', '🐰', '🦉', '🦄', '🐙', '🦈', '🐺', '🐝',
                  '🦋', '🐢', '🐳', '🦅', '🐴', '🐲', '👻', '🎃'];
 
-/* Number of mafia for a given player count. */
-function mafiaCount(n) {
-  return Math.max(1, Math.round(n / 4));
+/* Number of mafia for a given player count; maxMafia (0 = auto) caps it. */
+function mafiaCount(n, maxMafia) {
+  const auto = Math.max(1, Math.round(n / 4));
+  return maxMafia ? Math.min(auto, maxMafia) : auto;
 }
 
 /* Build and shuffle the role deck for n players. */
-function buildRoleDeck(n) {
+function buildRoleDeck(n, maxMafia) {
   const deck = [];
-  const nMafia = mafiaCount(n);
+  const nMafia = mafiaCount(n, maxMafia);
   for (let i = 0; i < nMafia; i++) deck.push('mafia');
   deck.push('doctor');
   deck.push('detective');
@@ -63,8 +64,8 @@ function buildRoleDeck(n) {
   return deck;
 }
 
-function roleSummary(n) {
-  const nMafia = mafiaCount(n);
+function roleSummary(n, maxMafia) {
+  const nMafia = mafiaCount(n, maxMafia);
   const nVillagers = n - nMafia - 2;
   const parts = [`${nMafia} Mafia`, '1 Doctor', '1 Detective'];
   if (nVillagers > 0) parts.push(`${nVillagers} Villager${nVillagers > 1 ? 's' : ''}`);

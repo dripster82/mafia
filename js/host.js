@@ -14,6 +14,7 @@ const Host = (() => {
   let localConn = null; // the host's own loopback connection
   let hostName = null;
   let G = null;        // game state
+  let settings = { safeFirstNight: false, maxMafia: 0, showVoters: true }; // survives new games
 
   /* ---------------- state ---------------- */
 
@@ -27,6 +28,7 @@ const Host = (() => {
       votes: null,         // {playerId: targetId|'nobody'}
       announce: null,      // latest event to show players
       winner: null,
+      chat: [],            // day-phase table talk, cleared each night
       log: [],             // public information only — the host can read this
     };
   }
@@ -120,6 +122,28 @@ const Host = (() => {
     if (bot) { bot.avatar = '🤖'; bot.isBot = true; broadcast(); }
   }
 
+  const BOT_LINES = [
+    'It wasn’t me, I promise!',
+    'Hmm, {name} is being very quiet…',
+    'I don’t trust {name} one bit.',
+    'My money’s on {name}.',
+    'Let’s not vote anyone out yet, it’s too early.',
+    'Something about {name} feels off today.',
+    'I was asleep all night, honest.',
+    'Did anyone else notice {name} acting strange?',
+    'We should think carefully before voting.',
+    'I say we vote out {name} and be done with it.',
+    '{name}, care to explain yourself?',
+    'The mafia is definitely among us…',
+  ];
+
+  function botLine(p) {
+    const others = alivePlayers().filter(t => t.id !== p.id);
+    const name = others.length ? others[Math.floor(Math.random() * others.length)].name : 'someone';
+    const line = BOT_LINES[Math.floor(Math.random() * BOT_LINES.length)];
+    return line.replace('{name}', name);
+  }
+
   function botAct(conn) {
     if (!G) return;
     const p = getPlayer(conn._playerId);
@@ -129,10 +153,18 @@ const Host = (() => {
     } else if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)) {
       const ts = nightTargetsFor(p);
       if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
-    } else if (G.phase === 'day' && !(p.id in G.votes)) {
-      const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
-      opts.push('nobody');
-      handleVote(p, opts[Math.floor(Math.random() * opts.length)]);
+    } else if (G.phase === 'day') {
+      // Talk first, vote on a later tick.
+      if (conn._chatDay !== G.dayNum) {
+        conn._chatDay = G.dayNum;
+        handleChat(p, botLine(p));
+        return;
+      }
+      if (!(p.id in G.votes)) {
+        const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
+        opts.push('nobody');
+        handleVote(p, opts[Math.floor(Math.random() * opts.length)]);
+      }
     }
   }
 
@@ -173,6 +205,17 @@ const Host = (() => {
     if (msg.t === 'profile') return handleProfile(p, msg);
     if (msg.t === 'confirm') return handleConfirm(p);
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
+    if (msg.t === 'chat') return handleChat(p, msg.text);
+  }
+
+  /* Day-phase table talk. Only living players may speak; everyone reads. */
+  function handleChat(p, text) {
+    if (G.phase !== 'day' || !p.alive) return;
+    text = String(text || '').trim().slice(0, 200);
+    if (!text) return;
+    G.chat.push({ name: p.name, avatar: p.avatar, text });
+    if (G.chat.length > 100) G.chat = G.chat.slice(-100);
+    broadcast();
   }
 
   /* Lobby-only: rename and avatar changes. */
@@ -240,9 +283,9 @@ const Host = (() => {
     if (connected.length < MIN_PLAYERS) return;
     // Drop anyone who left the lobby before start.
     G.players = connected;
-    const deck = buildRoleDeck(G.players.length);
+    const deck = buildRoleDeck(G.players.length, settings.maxMafia);
     G.players.forEach((p, i) => { p.role = deck[i]; p.alive = true; });
-    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length)}).`, true);
+    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, settings.maxMafia)}).`, true);
     G.phase = 'reveal';
     G.confirms = {};
     broadcast();
@@ -276,6 +319,7 @@ const Host = (() => {
     G.phase = 'night';
     G.night = { actions: {} };
     G.votes = null;
+    G.chat = [];
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
     broadcast();
   }
@@ -339,10 +383,14 @@ const Host = (() => {
 
     let killed = null;
     let saved = false;
+    let wounded = null;
     if (killTarget) {
       if (killTarget === savedId) {
         saved = true;
         addLog(`The mafia struck, but the doctor saved their target!`, true);
+      } else if (G.dayNum === 1 && settings.safeFirstNight) {
+        wounded = getPlayer(killTarget);
+        addLog(`${wounded.name} was wounded in the night, but survived!`, true);
       } else {
         const victim = getPlayer(killTarget);
         victim.alive = false;
@@ -358,6 +406,7 @@ const Host = (() => {
       kind: 'dawn',
       killedName: killed ? killed.name : null,
       killedRole: killed ? killed.role : null,
+      woundedName: wounded ? wounded.name : null,
       saved,
     };
 
@@ -477,7 +526,8 @@ const Host = (() => {
       minPlayers: MIN_PLAYERS,
       winner: G.winner,
       announce: G.announce,
-      roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length) : null,
+      roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, settings.maxMafia) : null,
+      settings: { safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters },
       you: {
         id: p.id, name: p.name, alive: p.alive, avatar: p.avatar,
         role: G.phase === 'lobby' ? null : p.role,
@@ -513,14 +563,22 @@ const Host = (() => {
 
     if (G.phase === 'day') {
       const counts = {};
-      Object.values(G.votes).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+      const voters = {};
+      Object.entries(G.votes).forEach(([voterId, t]) => {
+        counts[t] = (counts[t] || 0) + 1;
+        const v = getPlayer(voterId);
+        (voters[t] = voters[t] || []).push(`${v.avatar || ''} ${v.name}`);
+      });
       view.vote = {
         yourVote: G.votes[p.id] || null,
         counts,
+        voters: settings.showVoters ? voters : null,
         voted: Object.keys(G.votes).length,
         needed: alivePlayers().length,
         targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })),
       };
+      view.chat = G.chat.slice(-50);
+      view.canChat = p.alive;
     }
 
     return view;
@@ -563,7 +621,7 @@ const Host = (() => {
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
-            <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n)) : `need ${MIN_PLAYERS - n} more`}</span></div>
+            <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n, settings.maxMafia)) : `need ${MIN_PLAYERS - n} more`}</span></div>
           <div class="player-list">${G.players.map(p => `
             <div class="player-row">
               <span class="dot ${p.connected ? 'on' : 'off'}"></span>
@@ -576,6 +634,16 @@ const Host = (() => {
           <button id="btn-add-bot" class="btn" style="margin-top:8px;width:100%">🤖 Add a bot player</button>
           <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.
           Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
+        </div>
+        <div class="card"><h3>Game options</h3>
+          <label class="opt"><input type="checkbox" id="opt-safe-night" ${settings.safeFirstNight ? 'checked' : ''}>
+            No deaths on the first night — the victim is only wounded</label>
+          <label class="opt">Max mafia:
+            <select id="opt-max-mafia">${[0, 1, 2, 3, 4].map(v =>
+              `<option value="${v}" ${settings.maxMafia === v ? 'selected' : ''}>${v === 0 ? 'Auto' : v}</option>`).join('')}
+            </select></label>
+          <label class="opt"><input type="checkbox" id="opt-show-voters" ${settings.showVoters ? 'checked' : ''}>
+            Show who voted for who (unticked = secret ballot)</label>
         </div>`;
     }
 
@@ -630,6 +698,12 @@ const Host = (() => {
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
     });
+    const os = el('opt-safe-night');
+    if (os) os.onchange = () => { settings.safeFirstNight = os.checked; broadcast(); };
+    const om = el('opt-max-mafia');
+    if (om) om.onchange = () => { settings.maxMafia = parseInt(om.value, 10) || 0; broadcast(); };
+    const ov = el('opt-show-voters');
+    if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
   }
 
   return { create, destroy, PEER_PREFIX };

@@ -102,6 +102,26 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .room-code-box .url { color: var(--muted); font-size: 0.85rem; word-break: break-all; }
 
+/* Host game options */
+.opt { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 0.92rem; color: var(--text); }
+.opt input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+.opt select {
+  background: var(--bg2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; font-size: 0.92rem;
+}
+
+/* Day-phase chat */
+.chat-log {
+  max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; margin: 8px 0;
+}
+.chat-msg { font-size: 0.9rem; line-height: 1.4; word-break: break-word; }
+.chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
+.chat-row { display: flex; gap: 8px; }
+.chat-row input { flex: 1; padding: 10px 12px; font-size: 1rem; }
+.voter-breakdown { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+
 /* Profile editing */
 .profile-row { display: flex; gap: 8px; margin-top: 8px; }
 .profile-row input { flex: 1; }
