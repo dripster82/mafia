@@ -289,7 +289,7 @@ const Player = (() => {
   function maybeAnimatePhase(prevPhase, phase, dayNum) {
     if (prevPhase === null || prevPhase === phase) return;
     let kind = null;
-    if (phase === 'night' && (prevPhase === 'reveal' || prevPhase === 'day')) kind = 'night';
+    if (phase === 'night' && (prevPhase === 'reveal' || prevPhase === 'day' || prevPhase === 'verdict')) kind = 'night';
     if (phase === 'day' && prevPhase === 'night') kind = 'day';
     if (!kind || document.querySelector('.phase-overlay')) return;
     const ov = document.createElement('div');
@@ -396,10 +396,12 @@ const Player = (() => {
     }
     if (view.phase === 'night' && a.kind === 'verdict' && view.dayNum > 1) {
       if (a.eliminatedName) {
-        return `<div class="banner death"><p>The town voted out <strong>${esc(a.eliminatedName)}</strong> —
+        return `<div class="banner death"><p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> —
           they were the <strong>${ROLES[a.eliminatedRole].name}</strong>.</p></div>`;
       }
-      return `<div class="banner day"><p>${a.tied ? 'The vote was tied — no one was eliminated.' : 'The town chose to eliminate no one.'}</p></div>`;
+      return `<div class="banner day"><p>${a.tied ? 'The vote was tied — no one was eliminated.'
+        : a.noMajority ? 'No majority was reached — no one was eliminated.'
+        : 'The village chose to eliminate no one.'}</p></div>`;
     }
     return '';
   }
@@ -438,6 +440,27 @@ const Player = (() => {
         </div>`;
       }
       html += playersListHTML(false);
+    }
+
+    /* ----- verdict reveal (short pause before night) ----- */
+    else if (view.phase === 'verdict') {
+      const a = view.announce || {};
+      if (a.eliminatedName) {
+        const you = a.eliminatedName === view.you.name;
+        html += `<div class="banner death"><span class="big-emoji">⚖️</span>
+          <h2>The village has spoken</h2>
+          <p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> — they were eliminated.</p>
+          <p><strong>${esc(a.eliminatedName)}</strong> was the
+            <strong>${ROLES[a.eliminatedRole].icon} ${ROLES[a.eliminatedRole].name}</strong>.</p>
+          ${you ? '<p><strong>That’s you — you’re out. 👻</strong></p>' : ''}</div>`;
+      } else {
+        html += `<div class="banner day"><span class="big-emoji">🕊</span>
+          <h2>No one was eliminated</h2>
+          <p class="muted">${a.tied ? 'The vote was tied.'
+            : a.noMajority ? 'No majority was reached.'
+            : 'The village chose to spare everyone.'}</p></div>`;
+      }
+      html += `<p class="progress-note pulsing">Night falls in a moment…</p>`;
     }
 
     /* ----- dead spectator ----- */
@@ -508,17 +531,16 @@ const Player = (() => {
         <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
         <p class="muted small-text" style="margin-bottom:10px">Discuss out loud, then cast your vote. You can change it until everyone has voted.</p>
         <div class="target-grid">${
-          v.targets.map(t => `<button class="btn ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">
-            <span>${t.avatar || ''} ${esc(t.name)}</span>${v.counts[t.id] ? `<span class="vote-count">${v.counts[t.id]} 🗳</span>` : ''}</button>`).join('')
-        }<button class="btn ${v.yourVote === 'nobody' ? 'selected' : ''}" data-vote="nobody">
-          <span>🕊 No one</span>${v.counts.nobody ? `<span class="vote-count">${v.counts.nobody} 🗳</span>` : ''}</button>
-        </div>
-        ${v.voters && Object.keys(v.voters).length ? `<div class="voter-breakdown">${
-          Object.entries(v.voters).map(([t, names]) => {
-            const target = t === 'nobody' ? '🕊 No one' : (() => { const tp = view.players.find(p => p.id === t); return tp ? `${tp.avatar || ''} ${esc(tp.name)}` : '?'; })();
-            return `<div class="small-text muted">${target} ← ${names.map(esc).join(', ')}</div>`;
+          [...v.targets.map(t => ({ id: t.id, label: `${t.avatar || ''} ${esc(t.name)}` })),
+           { id: 'nobody', label: '🕊 No one' }].map(t => {
+            const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
+            const count = v.counts[t.id] ? `${v.counts[t.id]} 🗳` : '';
+            return `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">
+              <span class="vote-voters">${votersHere || '&nbsp;'}</span>
+              <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>
+            </button>`;
           }).join('')
-        }</div>` : ''}
+        }</div>
         </div>`;
       html += chatCardHTML();
     }

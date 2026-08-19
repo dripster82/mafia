@@ -129,7 +129,14 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
 .chat-row { display: flex; gap: 8px; }
 .chat-row input { flex: 1; padding: 10px 12px; font-size: 1rem; }
-.voter-breakdown { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+/* Vote rows: voters' names on the left, the candidate floated right */
+.vote-line { gap: 10px; }
+.vote-line .vote-voters {
+  flex: 1; min-width: 0; text-align: left;
+  font-size: 0.76rem; font-weight: 500; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vote-line .vote-target { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
 
 /* Profile editing */
 .profile-row { display: flex; gap: 8px; margin-top: 8px; }

@@ -440,12 +440,19 @@ const Host = (() => {
     const max = Math.max(0, ...Object.values(tally));
     const top = Object.keys(tally).filter(t => tally[t] === max && max > 0);
 
+    // Elimination needs a strict majority of the votes cast, not a plurality.
     let eliminated = null;
+    let noMajority = false;
     if (top.length === 1 && top[0] !== 'nobody') {
-      eliminated = getPlayer(top[0]);
-      eliminated.alive = false;
-      eliminated.causeOfDeath = 'vote';
-      addLog(`The town voted out ${eliminated.name}. They were the ${ROLES[eliminated.role].name}.`, true);
+      if (max > cast.length / 2) {
+        eliminated = getPlayer(top[0]);
+        eliminated.alive = false;
+        eliminated.causeOfDeath = 'vote';
+        addLog(`The village ganged up on ${eliminated.name} (${max}/${cast.length} votes) — they were the ${ROLES[eliminated.role].name}.`, true);
+      } else {
+        noMajority = true;
+        addLog('No majority was reached — no one was eliminated.');
+      }
     } else if (top.length > 1) {
       addLog('The vote was tied — no one was eliminated.');
     } else {
@@ -456,12 +463,19 @@ const Host = (() => {
       kind: 'verdict',
       eliminatedName: eliminated ? eliminated.name : null,
       eliminatedRole: eliminated ? eliminated.role : null,
-      tied: !eliminated && top.length > 1,
+      tied: !eliminated && !noMajority && top.length > 1,
+      noMajority,
       forced: !!forced,
     };
 
-    if (checkWin()) return;
-    startNight();
+    // Show the verdict to everyone for a few seconds before moving on.
+    G.phase = 'verdict';
+    broadcast();
+    setTimeout(() => {
+      if (!G || G.phase !== 'verdict') return;
+      if (checkWin()) return;
+      startNight();
+    }, 5000);
   }
 
   function checkWin() {
@@ -567,7 +581,7 @@ const Host = (() => {
       Object.entries(G.votes).forEach(([voterId, t]) => {
         counts[t] = (counts[t] || 0) + 1;
         const v = getPlayer(voterId);
-        (voters[t] = voters[t] || []).push(`${v.avatar || ''} ${v.name}`);
+        (voters[t] = voters[t] || []).push(v.name);
       });
       view.vote = {
         yourVote: G.votes[p.id] || null,
@@ -672,9 +686,14 @@ const Host = (() => {
       html += `
         <div class="card">
           <h3>Host controls</h3>
-          <p class="muted small-text" style="margin:6px 0 10px">Votes cast: ${Object.keys(G.votes).length}/${alivePlayers().length}.</p>
+          <p class="muted small-text" style="margin:6px 0 10px">Votes cast: ${Object.keys(G.votes).length}/${alivePlayers().length}. A strict majority is needed to eliminate.</p>
           <button id="btn-force-vote" class="btn" style="width:100%">⏭ End voting now (count votes cast)</button>
         </div>`;
+    }
+
+    if (G.phase === 'verdict') {
+      html += `<div class="card"><h3>Host controls</h3>
+        <p class="muted small-text pulsing" style="margin-top:6px">⚖️ Verdict shown — night falls in a moment…</p></div>`;
     }
 
     if (G.phase === 'ended') {
