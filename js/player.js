@@ -632,6 +632,7 @@ const Player = (() => {
         <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
         A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
         ${voteGridHTML(v, { includeNobody: true })}
+        ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>' : ''}
         </div>`;
       html += chatCardHTML();
     }

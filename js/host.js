@@ -25,6 +25,7 @@ const Host = (() => {
              jester: false, executioner: false, drifter: false },
   };
   let phaseTimer = null; // auto-advance timeout for the current phase
+  let voteCloseTimer = null; // short pause between the last vote and the verdict
 
   function deckOpts() {
     return { maxMafia: settings.maxMafia, roles: settings.roles };
@@ -773,6 +774,7 @@ const Host = (() => {
 
     G.phase = 'day';
     G.votes = {};
+    G.voteClosing = false;
     setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
     broadcast();
@@ -802,7 +804,14 @@ const Host = (() => {
     if (!valid) return;
     G.votes[p.id] = targetId;
     const pending = alivePlayers().filter(v => !(v.id in G.votes));
-    if (pending.length === 0) resolveVote();
+    if (pending.length === 0) {
+      // Everyone's in — hold the final tally on screen for a beat.
+      G.voteClosing = true;
+      clearTimeout(voteCloseTimer);
+      voteCloseTimer = setTimeout(() => {
+        if (G && G.phase === 'day') resolveVote();
+      }, 2000);
+    }
     broadcast();
   }
 
@@ -810,6 +819,8 @@ const Host = (() => {
 
   function resolveVote(forced) {
     if (G.phase !== 'day') return;
+    clearTimeout(voteCloseTimer);
+    G.voteClosing = false;
 
     // Ghost votes are spent the day they're counted.
     const ghostVoters = Object.keys(G.votes).map(getPlayer).filter(v => v && !v.alive);
@@ -1365,6 +1376,7 @@ const Host = (() => {
         voted: alivePlayers().filter(x => x.id in G.votes).length,
         needed: alivePlayers().length,
         majority: Math.floor(aliveWeight / 2) + 1,
+        closing: !!G.voteClosing,
         ghost: ghostCanVote(p),
         ghostSpent: !p.alive && !p.spectator && !!p.ghostVoteUsed && settings.ghostVote,
         // The whole roster: the fallen stay in the list (not votable) so the
