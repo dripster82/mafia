@@ -205,11 +205,18 @@ const Host = (() => {
     const lower = text.toLowerCase();
     const detClaim = /i'?m the detective|i am the detective|detective here|bet my badge/.test(lower);
     const defend = /innocent|not (the )?mafia|isn'?t (the )?mafia|it'?s not|it is not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe|save\b/.test(lower);
-    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/.test(lower);
+    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|lied|\blie\b|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/.test(lower);
 
     // Anyone claiming to be the detective becomes a priority for both sides:
     // the mafia want them dead, the town wants them protected.
     if (detClaim) (G.detClaimants = G.detClaimants || new Set()).add(speaker.id);
+
+    // Public record: any role claim is remembered — if someone else later dies
+    // holding that role, the claimant is exposed as a liar.
+    const claimMatch = lower.match(/i'?m the (detective|doctor|bodyguard|mayor|vigilante|watcher|tracker|coroner|bookkeeper|mortician)|i am the (detective|doctor|bodyguard|mayor|vigilante|watcher|tracker|coroner|bookkeeper|mortician)|(detective|doctor) here/);
+    if (claimMatch) {
+      (G.roleClaims = G.roleClaims || {})[speaker.id] = claimMatch[1] || claimMatch[2] || claimMatch[3];
+    }
 
     const mentioned = [];
     const preMentioned = alivePlayers().filter(t => t.id !== speaker.id && lower.includes(t.name.toLowerCase()));
@@ -228,6 +235,10 @@ const Host = (() => {
       if (amt) {
         alivePlayers().filter(b => b.isBot && b.id !== speaker.id).forEach(b => bumpFor(b, t.id, amt));
         if (amt > 0) heatUp(t, amt);
+        // Remember who said what about whom — deaths re-read this record.
+        const rec = { day: G.dayNum, speakerId: speaker.id, targetId: t.id, detClaim };
+        if (amt > 0) (G.accusations = G.accusations || []).push(rec);
+        else (G.defenses = G.defenses || []).push(rec);
       }
     });
     // Bots answer when spoken to (questions, greetings, or just their name).
@@ -276,6 +287,126 @@ const Host = (() => {
       }
     }
     maybeReconsiderVotes();
+  }
+
+  /* A revealed death makes every bot re-read the public record in hindsight:
+   * a dead detective's accusations become gospel, a dead mafioso's words get
+   * inverted, vote-blocs with the mafia look dirty, and anyone who claimed
+   * the dead player's role stands exposed as a liar. */
+  function reassessOnDeath(dead) {
+    if (!dead || !dead.role || dead.cleaned) return; // cleaned bodies teach nothing
+    const bots = G.players.filter(b => b.isBot && b.alive);
+    if (!bots.length) return;
+    const wasMafia = teamOf(dead) === 'mafia';
+    const wasTown = !wasMafia && ROLES[dead.role].team === 'town';
+    const wasDetective = dead.role === 'detective' && !dead.recruited;
+
+    // 1) Re-weigh everything the dead player said.
+    let gospelTarget = null;
+    (G.accusations || []).filter(a => a.speakerId === dead.id).forEach(a => {
+      const t = getPlayer(a.targetId);
+      if (!t || !t.alive) return;
+      if (wasDetective) {
+        bots.forEach(b => bumpFor(b, t.id, a.detClaim ? 8 : 6)); // the dead detective's word is gospel
+        gospelTarget = t;
+      } else if (wasTown) {
+        bots.forEach(b => bumpFor(b, t.id, 2));
+      } else if (wasMafia) {
+        bots.forEach(b => bumpFor(b, t.id, -3)); // mafia deflection — probably innocent
+      }
+    });
+    if (wasMafia) {
+      (G.defenses || []).filter(a => a.speakerId === dead.id).forEach(a => {
+        const t = getPlayer(a.targetId);
+        if (t && t.alive) bots.forEach(b => bumpFor(b, t.id, 3)); // whoever the mafia shielded…
+      });
+    }
+
+    // 2) Re-read the vote record.
+    if (wasDetective) {
+      (G.voteHistory || []).forEach(dr => {
+        const t = dr.votes[dead.id];
+        if (t && t !== 'nobody') {
+          const tp = getPlayer(t);
+          if (tp && tp.alive) bots.forEach(b => bumpFor(b, t, 4));
+        }
+      });
+    }
+    if (wasMafia) {
+      (G.voteHistory || []).forEach(dr => {
+        const deadVote = dr.votes[dead.id];
+        if (!deadVote || deadVote === 'nobody') return;
+        Object.entries(dr.votes).forEach(([vid, tgt]) => {
+          if (vid === dead.id || tgt !== deadVote) return;
+          const v = getPlayer(vid);
+          if (v && v.alive) bots.forEach(b => bumpFor(b, vid, 1)); // voted the mafia's line
+        });
+      });
+    }
+    if (wasTown) {
+      // Those who campaigned against a proven townsperson look worse for it.
+      (G.accusations || []).filter(a => a.targetId === dead.id).forEach(a => {
+        const sp = getPlayer(a.speakerId);
+        if (sp && sp.alive) { bots.forEach(b => bumpFor(b, sp.id, 2)); heatUp(sp, 1); }
+      });
+      if (dead.causeOfDeath === 'vote') {
+        const last = (G.voteHistory || []).slice(-1)[0];
+        if (last) {
+          Object.entries(last.votes).forEach(([vid, tgt]) => {
+            if (tgt !== dead.id) return;
+            const v = getPlayer(vid);
+            if (v && v.alive) bots.forEach(b => bumpFor(b, vid, 2));
+          });
+        }
+      }
+    }
+
+    // 3) Exposed liars: someone else claimed the role this player really had.
+    Object.entries(G.roleClaims || {}).forEach(([claimantId, roleId]) => {
+      if (claimantId === dead.id || roleId !== dead.role) return;
+      const liar = getPlayer(claimantId);
+      if (!liar || !liar.alive) return;
+      bots.forEach(b => bumpFor(b, liar.id, 6));
+      heatUp(liar, 5);
+      (G.pendingCallouts = G.pendingCallouts || []).push({
+        kind: 'liar', liarId: liar.id, roleName: ROLES[dead.role].name, deadName: dead.name,
+      });
+    });
+
+    // A dead detective's strongest lead gets picked up out loud.
+    if (wasDetective && gospelTarget) {
+      (G.pendingCallouts = G.pendingCallouts || []).push({
+        kind: 'gospel', targetId: gospelTarget.id, deadName: dead.name,
+      });
+    }
+  }
+
+  /* At the next day's table, a bot voices what the deaths revealed. */
+  function processCallouts() {
+    const co = (G.pendingCallouts || []).splice(0, 2);
+    co.forEach((c, i) => {
+      setTimeout(() => {
+        if (!G || G.phase !== 'day') return;
+        const speakers = alivePlayers().filter(b => b.isBot && b.id !== c.liarId && teamOf(b) !== 'mafia');
+        if (!speakers.length) return;
+        const speaker = rndOf(speakers);
+        if (c.kind === 'liar') {
+          const liar = getPlayer(c.liarId);
+          if (!liar || !liar.alive) return;
+          handleChat(speaker, rndOf([
+            `Hold on. ${c.deadName} was the REAL ${c.roleName}. ${liar.name}, you lied to all of us.`,
+            `${c.deadName} turned out to be the ${c.roleName}… which makes ${liar.name}'s claim a flat lie. Interesting.`,
+          ]));
+        } else if (c.kind === 'gospel') {
+          const t = getPlayer(c.targetId);
+          if (!t || !t.alive) return;
+          handleChat(speaker, rndOf([
+            `${c.deadName} was the detective — and they suspected ${t.name}. I say we finish what they started.`,
+            `Remember: ${c.deadName}, the real detective, pointed at ${t.name}. That's good enough for me.`,
+          ]));
+        }
+      }, 3000 + i * 3500 + Math.random() * 2000);
+    });
   }
 
   /* When someone claims detective and the REAL detective is a bot, the bot
@@ -955,6 +1086,9 @@ const Host = (() => {
 
     if (checkWin()) return;
 
+    // Deaths make the town re-read the record with hindsight.
+    killed.forEach(k => reassessOnDeath(getPlayer(k.id)));
+
     G.phase = 'day';
     G.votes = {};
     G.ghostSaves = {};
@@ -962,6 +1096,7 @@ const Host = (() => {
     setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
     broadcast();
+    processCallouts();
   }
 
   /* ---------------- day / voting ---------------- */
@@ -1042,6 +1177,7 @@ const Host = (() => {
       tally[t] = (tally[t] || 0) + w;
     });
     ghostVoters.forEach(v => { v.ghostVoteUsed = true; });
+    (G.voteHistory = G.voteHistory || []).push({ day: G.dayNum, votes: Object.assign({}, G.votes) });
     const max = Math.max(0, ...Object.values(tally));
     const top = Object.keys(tally).filter(t => tally[t] === max && max > 0);
 
@@ -1062,6 +1198,9 @@ const Host = (() => {
     } else {
       addLog('The town chose to eliminate no one.');
     }
+
+    // The elimination reveals a role — the town re-reads the record.
+    if (eliminated) reassessOnDeath(eliminated);
 
     // Executioners: settled or spoiled grudges.
     if (eliminated) {
