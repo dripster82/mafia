@@ -189,6 +189,10 @@ const Host = (() => {
     const defend = /innocent|not (the )?mafia|it'?s not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe/.test(lower);
     const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|vote (out|for)?|it'?s |money'?s on|watch|strange|acting/.test(lower);
 
+    // Anyone claiming to be the detective becomes a priority for both sides:
+    // the mafia want them dead, the town wants them protected.
+    if (detClaim) (G.detClaimants = G.detClaimants || new Set()).add(speaker.id);
+
     const mentioned = [];
     alivePlayers().forEach(t => {
       if (t.id === speaker.id) return;
@@ -598,16 +602,21 @@ const Host = (() => {
     // 9. Apply deaths (safe first night wounds instead, poison excepted).
     const killed = [];
     const woundedNames = [];
+    const woundedIds = [];
     deaths.forEach((cause, id) => {
       const victim = getPlayer(id);
       if (G.dayNum === 1 && settings.safeFirstNight && cause !== 'poison') {
         woundedNames.push(victim.name);
+        woundedIds.push(id);
         return;
       }
       victim.alive = false;
       victim.causeOfDeath = cause;
       killed.push({ id, name: victim.name, role: victim.role, cause });
     });
+    // Survivors of an attack are likely to be attacked again — protective
+    // bots (doctor, bodyguard) prioritize them next night.
+    G.protectPriority = [...(saved && savedId ? [savedId] : []), ...woundedIds];
 
     // 10. Cleaner hides the family victim's role.
     alivePlayers().filter(p => p.role === 'cleaner' && p.cleanerUses > 0).forEach(c => {
@@ -1083,6 +1092,109 @@ const Host = (() => {
     return rndOf(BOT_LINES).replace('{name}', name);
   }
 
+  /* A bot's night decision, driven by what it knows: table-talk suspicion,
+   * detective claims it heard, who was attacked before, and its own history. */
+  function botNightChoice(p, ui) {
+    const PSEUDO = ['pledge', 'hide', 'clean'];
+    const T = ui.targets.map(t => t.id).filter(id => !PSEUDO.includes(id));
+    const inT = id => id && T.includes(id);
+    const s = id => G.suspicion[id] || 0;
+    const suspLeader = min => {
+      let best = null;
+      T.forEach(id => { if (s(id) >= min && (!best || s(id) > s(best))) best = id; });
+      return best;
+    };
+    const mostTrusted = () => {
+      let best = null;
+      T.forEach(id => { if (!best || s(id) < s(best)) best = id; });
+      return best;
+    };
+    const claimant = [...(G.detClaimants || [])].map(getPlayer)
+      .find(c => c && c.alive && inT(c.id));
+    const role = p.role;
+
+    if (role === 'mafia' || role === 'don') {
+      if (claimant && Math.random() < 0.75) return claimant.id; // silence the "detective"
+      const trusted = mostTrusted();
+      if (trusted && Math.random() < 0.5) return trusted;       // credible townsfolk are dangerous
+      return T.length ? rndOf(T) : 'skip';
+    }
+    if (role === 'detective') {
+      const seen = new Set((p.intel || []).map(i => i.targetId));
+      const fresh = T.filter(id => !seen.has(id));
+      if (!fresh.length) return rndOf(T);
+      let best = null;
+      fresh.forEach(id => { if (!best || s(id) > s(best)) best = id; });
+      return s(best) >= 2 ? best : rndOf(fresh);               // chase the accusations
+    }
+    if (role === 'doctor' || role === 'bodyguard') {
+      const pri = (G.protectPriority || []).find(id => inT(id));
+      if (pri && Math.random() < 0.7) return pri;              // they'll come back for them
+      if (claimant && Math.random() < 0.5) return claimant.id; // shield the claimed detective
+      if (role === 'doctor' && inT(p.id) && Math.random() < 0.3) return p.id;
+      return rndOf(T);
+    }
+    if (role === 'vigilante') {
+      const sus = suspLeader(4);
+      if (sus && Math.random() < 0.7) return sus;              // only shoot on strong suspicion
+      return 'skip';
+    }
+    if (role === 'watcher' || role === 'tracker') {
+      return suspLeader(2) || rndOf(T);                        // keep eyes on the suspects
+    }
+    if (role === 'coroner' || role === 'consigliere') {
+      const seen = new Set((p.actions || []).filter(a => a.role === role && a.target).map(a => a.target));
+      const fresh = ui.targets.filter(t => !PSEUDO.includes(t.id) && !seen.has(t.name)).map(t => t.id);
+      return fresh.length ? rndOf(fresh) : (ui.canSkip ? 'skip' : rndOf(T));
+    }
+    if (role === 'mortician') {
+      const power = ui.targets.filter(t => {
+        const b = getPlayer(t.id);
+        return b && ['doctor', 'detective', 'bodyguard', 'vigilante'].includes(b.role) && !b.cleaned;
+      });
+      if (power.length && Math.random() < 0.6) return rndOf(power).id; // raise the town's muscle
+      return Math.random() < 0.15 && T.length ? rndOf(T) : 'skip';
+    }
+    if (role === 'mayor') {
+      if (s(p.id) >= 3 && Math.random() < 0.7) return 'pledge'; // clear their own name
+      if (alivePlayers().length <= 5 && Math.random() < 0.35) return 'pledge';
+      return 'skip';
+    }
+    if (role === 'fixer') {
+      if (claimant && Math.random() < 0.7) return claimant.id;  // jam the detective
+      return Math.random() < 0.8 && T.length ? rndOf(T) : 'skip';
+    }
+    if (role === 'framer') {
+      return suspLeader(2) || (T.length ? rndOf(T) : 'skip');   // pile evidence where eyes already are
+    }
+    if (role === 'poisoner') {
+      const fresh = T.filter(id => { const t = getPlayer(id); return t && t.poisonedNight === null; });
+      if (claimant && fresh.includes(claimant.id)) return claimant.id;
+      return fresh.length ? rndOf(fresh) : 'skip';
+    }
+    if (role === 'forger') {
+      if (claimant && Math.random() < 0.6) return claimant.id;  // burn the detective's testimony
+      return Math.random() < 0.3 && T.length ? (mostTrusted() || rndOf(T)) : 'skip';
+    }
+    if (role === 'cleaner') {
+      const picks = killers().map(m => G.night.actions[m.id])
+        .filter(t => t && t !== 'skip').map(getPlayer).filter(Boolean);
+      const power = picks.some(t => t.role && t.role !== 'villager');
+      return (power ? Math.random() < 0.6 : Math.random() < 0.2) ? 'clean' : 'skip';
+    }
+    if (role === 'recruiter') {
+      const mafiaN = aliveMafia().length;
+      const townN = alivePlayers().length - mafiaN;
+      if (townN - mafiaN >= 3 && Math.random() < 0.5) return mostTrusted() || rndOf(T); // turn a trusted villager
+      return 'skip';
+    }
+    if (role === 'drifter') {
+      if (s(p.id) >= 3 && Math.random() < 0.7) return 'hide';   // heat's on — disappear
+      return Math.random() < 0.12 ? 'hide' : 'skip';
+    }
+    return ui.canSkip ? 'skip' : (T.length ? rndOf(T) : null);
+  }
+
   function botAct(conn) {
     if (!G) return;
     const p = getPlayer(conn._playerId);
@@ -1101,9 +1213,8 @@ const Host = (() => {
     } else if (G.phase === 'night' && !(p.id in G.night.actions)) {
       const ui = nightUIFor(p);
       if (!ui) return;
-      const opts = ui.targets.map(t => t.id);
-      if (ui.canSkip) { opts.push('skip'); if (p.role !== 'mafia' && p.role !== 'don') { opts.push('skip', 'skip'); } }
-      if (opts.length) handleNightAction(p, rndOf(opts));
+      const choice = botNightChoice(p, ui);
+      if (choice) handleNightAction(p, choice);
     } else if (G.phase === 'day') {
       if (conn._chatDay !== G.dayNum) {
         conn._chatDay = G.dayNum;
