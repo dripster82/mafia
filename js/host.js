@@ -187,8 +187,8 @@ const Host = (() => {
   function reactToChat(speaker, text) {
     const lower = text.toLowerCase();
     const detClaim = /i'?m the detective|i am the detective|detective here|bet my badge/.test(lower);
-    const defend = /innocent|not (the )?mafia|it'?s not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe/.test(lower);
-    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|vote (out|for)?|it'?s |money'?s on|watch|strange|acting/.test(lower);
+    const defend = /innocent|not (the )?mafia|isn'?t (the )?mafia|it'?s not|it is not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe|save\b/.test(lower);
+    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/.test(lower);
 
     // Anyone claiming to be the detective becomes a priority for both sides:
     // the mafia want them dead, the town wants them protected.
@@ -202,10 +202,23 @@ const Host = (() => {
       if (defend) bumpSuspicion(t.id, detClaim ? -4 : -2);
       else if (accuse) bumpSuspicion(t.id, detClaim ? 5 : 2);
     });
+    // Bots answer when spoken to (questions, greetings, or just their name).
+    mentioned.filter(t => t.isBot && t.alive).forEach(bot => {
+      if (accuse && !defend && !/\?/.test(lower)) return; // flat accusations get the defense path below
+      if (Date.now() - (bot.lastReplyAt || 0) < 8000) return;
+      if (Math.random() > 0.75) return;
+      bot.lastReplyAt = Date.now();
+      setTimeout(() => {
+        if (!G || G.phase !== 'day' || !bot.alive) return;
+        handleChat(bot, botReplyTo(bot, lower));
+      }, 1500 + Math.random() * 2500);
+    });
+
     if (!mentioned.length || defend || !accuse) { maybeReconsiderVotes(); return; }
 
     // Accused bots defend themselves (once per day)…
     mentioned.filter(t => t.isBot && t.alive).forEach(t => {
+      if (/\?/.test(lower)) return; // questions were answered above, not defended against
       if (t.defendedDay === G.dayNum || Math.random() > 0.6) return;
       t.defendedDay = G.dayNum;
       setTimeout(() => {
@@ -235,6 +248,29 @@ const Host = (() => {
       }
     }
     maybeReconsiderVotes();
+  }
+
+  /* What a bot says when directly addressed. */
+  function botReplyTo(bot, lower) {
+    if (/\?|what do you think|who (do|should|is)|any ideas|thoughts/.test(lower)) {
+      if (bot.role === 'detective' && bot.intel) {
+        const m = bot.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
+        if (m.length) return rndOf([`Between us? Keep a very close eye on ${m[0].name}.`, `I have solid reasons to distrust ${m[0].name}.`]);
+      }
+      const pick = botSuspicionPick(bot, 2);
+      if (pick) {
+        return rndOf([
+          `Honestly? My money's on ${pick.name}.`,
+          `If I had to guess: ${pick.name}.`,
+          `Something's been off about ${pick.name} all day.`,
+        ]);
+      }
+      return rndOf(['Too early to say.', 'I need more to go on — keep talking.', 'No idea yet. Watch the quiet ones.']);
+    }
+    if (/\b(hi|hello|hey|morning|yo)\b/.test(lower)) {
+      return rndOf(['Hey 👋', 'Morning. Rough night, huh?', 'Hello there.', 'Yo. Trust no one.']);
+    }
+    return rndOf(['Hmm. Noted.', 'Interesting theory…', 'I’m listening.', 'Go on…', 'Say that a little louder for the table.']);
   }
 
   /* The most suspicious valid vote target for a bot, if any stands out. */
@@ -774,6 +810,7 @@ const Host = (() => {
 
     G.phase = 'day';
     G.votes = {};
+    G.ghostSaves = {};
     G.voteClosing = false;
     setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
@@ -788,30 +825,55 @@ const Host = (() => {
     return settings.ghostVote && !p.alive && !p.spectator && !p.ghostVoteUsed && p.role;
   }
 
+  /* Ghosts with an unspent last vote must decide each day: cast it or save it. */
+  function pendingGhosts() {
+    return G.players.filter(x => ghostCanVote(x) && !(x.id in G.votes) && !G.ghostSaves[x.id]);
+  }
+
+  function maybeCloseVoting() {
+    if (G.phase !== 'day') return;
+    if (alivePlayers().some(v => !(v.id in G.votes))) return;
+    if (pendingGhosts().length) return;
+    // Everyone's decided — hold the final tally on screen for a beat.
+    G.voteClosing = true;
+    clearTimeout(voteCloseTimer);
+    voteCloseTimer = setTimeout(() => {
+      if (G && G.phase === 'day') resolveVote();
+    }, 2000);
+  }
+
   function handleVote(p, targetId) {
     if (G.phase !== 'day') return;
     if (!p.alive) {
-      // One vote from beyond the grave — castable (or retractable) any day.
+      // One vote from beyond the grave — cast it, save it, or take it back.
       if (!ghostCanVote(p)) return;
-      if (targetId === 'retract') { delete G.votes[p.id]; broadcast(); return; }
+      if (targetId === 'save') {
+        delete G.votes[p.id];
+        G.ghostSaves[p.id] = true;
+        maybeCloseVoting();
+        broadcast();
+        return;
+      }
+      if (targetId === 'retract') {
+        delete G.votes[p.id];
+        delete G.ghostSaves[p.id];
+        G.voteClosing = false;
+        clearTimeout(voteCloseTimer);
+        broadcast();
+        return;
+      }
       if (!alivePlayers().some(t => t.id === targetId)) return;
+      delete G.ghostSaves[p.id];
       G.votes[p.id] = targetId;
+      maybeCloseVoting();
       broadcast();
-      return; // ghosts never trigger resolution
+      return; // ghosts never force an early resolution on their own
     }
     const valid = targetId === 'nobody' ||
       (alivePlayers().some(t => t.id === targetId) && targetId !== p.id);
     if (!valid) return;
     G.votes[p.id] = targetId;
-    const pending = alivePlayers().filter(v => !(v.id in G.votes));
-    if (pending.length === 0) {
-      // Everyone's in — hold the final tally on screen for a beat.
-      G.voteClosing = true;
-      clearTimeout(voteCloseTimer);
-      voteCloseTimer = setTimeout(() => {
-        if (G && G.phase === 'day') resolveVote();
-      }, 2000);
-    }
+    maybeCloseVoting();
     broadcast();
   }
 
@@ -880,11 +942,26 @@ const Host = (() => {
     broadcast();
 
     if (eliminated && eliminated.isBot && !eliminated.forged) {
-      const line = teamOf(eliminated) === 'mafia'
-        ? rndOf(['You got me. Well played, town. 🔪', 'Fine, it was me. But the family is still out there… or are they?'])
-        : eliminated.role === 'jester'
-          ? rndOf(['HA! You absolute fools — this is EXACTLY what I wanted! 🃏', 'Thank you, thank you! You played right into my hands! 🃏'])
-          : rndOf(['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!', 'I told you it wasn’t me…']);
+      const LAST_WORDS = {
+        detective: ['I was the DETECTIVE, you fools! My notes… check my notes…', 'You’ve doomed us all — I was so close!'],
+        doctor: ['Who’s going to patch you up now?', 'I saved your lives, and THIS is the thanks I get?'],
+        vigilante: ['I still had a bullet with someone’s name on it…', 'Should’ve shot first and voted later.'],
+        bodyguard: ['Who’ll take the bullet for you now?'],
+        mayor: ['You’ve just voted out city hall itself!'],
+        jester: ['HA! You absolute fools — this is EXACTLY what I wanted! 🃏', 'Thank you, thank you! You played right into my hands! 🃏',
+                 '*cackles wildly* WORTH IT!', 'My finest performance yet. Curtain! 🃏'],
+        executioner: ['My grudge dies with me… how poetic.'],
+        drifter: ['I was just passing through, man…'],
+      };
+      const MAFIA_WORDS = ['You got me. Well played, town. 🔪', 'Fine, it was me. But the family is still out there… or are they?',
+                           'The family will remember this.', 'You win this round. The streets won’t forget.', 'Heh. Took you long enough.'];
+      const TOWN_WORDS = ['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!',
+                          'I told you it wasn’t me…', 'Wrong person, geniuses.', 'My conscience is clean — can you say the same?',
+                          'Remember me when the mafia comes knocking.', 'No hard feelings. (Some hard feelings.)'];
+      const pool = teamOf(eliminated) === 'mafia'
+        ? MAFIA_WORDS
+        : [...(LAST_WORDS[eliminated.role] || []), ...TOWN_WORDS];
+      const line = rndOf(LAST_WORDS[eliminated.role] && Math.random() < 0.6 ? LAST_WORDS[eliminated.role] : pool);
       setTimeout(() => {
         if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
           G.lastWords = line;
@@ -1212,12 +1289,13 @@ const Host = (() => {
     if (!G) return;
     const p = getPlayer(conn._playerId);
     if (!p) return;
-    // Dead bots may still spend their ghost vote.
+    // Dead bots decide their ghost vote: cast it on a strong lead, else save it.
     if (!p.alive) {
-      if (G.phase === 'day' && ghostCanVote(p) && !(p.id in G.votes) && Math.random() < 0.4) {
+      if (G.phase === 'day' && ghostCanVote(p) && !(p.id in G.votes) && !G.ghostSaves[p.id]) {
         const known = p.intel && p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
         const pick = (known && known.length) ? known[0] : botSuspicionPick(p, 3);
-        if (pick) handleVote(p, pick.id);
+        if (pick && Math.random() < 0.7) handleVote(p, pick.id);
+        else handleVote(p, 'save');
       }
       return;
     }
@@ -1380,6 +1458,8 @@ const Host = (() => {
         majority: Math.floor(aliveWeight / 2) + 1,
         closing: !!G.voteClosing,
         ghost: ghostCanVote(p),
+        ghostSaved: !!G.ghostSaves[p.id],
+        ghostsPending: pendingGhosts().length,
         ghostSpent: !p.alive && !p.spectator && !!p.ghostVoteUsed && settings.ghostVote,
         // The whole roster: the fallen stay in the list (not votable) so the
         // day screen shows who's already gone.
@@ -1526,7 +1606,7 @@ const Host = (() => {
       html += `
         <div class="card">
           <h3>Host controls</h3>
-          <p class="muted small-text" style="margin:6px 0 10px">Votes cast: ${Object.keys(G.votes).length}/${alivePlayers().length}. A strict majority is needed to eliminate.</p>
+          <p class="muted small-text" style="margin:6px 0 10px">Votes cast: ${alivePlayers().filter(x => x.id in G.votes).length}/${alivePlayers().length}${pendingGhosts().length ? ` · ${pendingGhosts().length} ghost vote${pendingGhosts().length > 1 ? 's' : ''} undecided` : ''}. A strict majority is needed to eliminate.</p>
           <button id="btn-force-vote" class="btn" style="width:100%">⏭ End voting now (count votes cast)</button>
         </div>`;
     }

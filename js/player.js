@@ -553,9 +553,12 @@ const Player = (() => {
         html += `<div class="card">
           <div class="section-title"><h3>👻 Your last vote</h3>
           <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-          <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day by not voting.
+          <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day.
           A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
-          ${voteGridHTML(v, { retract: true })}</div>`;
+          ${v.ghostSaved ? '<p class="progress-note" style="margin-bottom:10px">💾 Saved for a later day — you can still change your mind below.</p>' : ''}
+          ${voteGridHTML(v, { retract: true })}
+          ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
+        </div>`;
       } else if (view.phase === 'day' && view.vote && view.vote.ghostSpent) {
         html += `<p class="progress-note">👻 Your last vote has been spent.</p>`;
       }
@@ -632,7 +635,8 @@ const Player = (() => {
         <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
         A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
         ${voteGridHTML(v, { includeNobody: true })}
-        ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>' : ''}
+        ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
+          : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
         </div>`;
       html += chatCardHTML();
     }
