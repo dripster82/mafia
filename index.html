@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mafia Night — Game Operator</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ HOME ============ -->
+  <section id="screen-home" class="screen active">
+    <div class="card center">
+      <h1 class="logo">🕵️ Mafia Night</h1>
+      <p class="tagline">A browser-based operator for the classic party game.<br>One device hosts, everyone else joins.</p>
+      <button id="btn-go-host" class="btn primary big">Host a game</button>
+      <button id="btn-go-join" class="btn big">Join a game</button>
+      <p class="hint">No accounts, no servers — devices connect directly to the host. Keep the host device awake for the whole game.</p>
+    </div>
+  </section>
+
+  <!-- ============ JOIN FORM ============ -->
+  <section id="screen-join" class="screen">
+    <div class="card center">
+      <h2>Join a game</h2>
+      <label for="join-code">Room code</label>
+      <input id="join-code" type="text" maxlength="5" autocomplete="off" autocapitalize="characters" placeholder="e.g. QWXZR">
+      <label for="join-name">Your name</label>
+      <input id="join-name" type="text" maxlength="16" autocomplete="off" placeholder="e.g. Alex">
+      <button id="btn-join" class="btn primary big">Join</button>
+      <button class="btn link back-home">← Back</button>
+      <p id="join-error" class="error hidden"></p>
+    </div>
+  </section>
+
+  <!-- ============ HOST ============ -->
+  <section id="screen-host" class="screen">
+    <header class="topbar">
+      <span class="logo small">🕵️ Mafia Night</span>
+      <span id="host-room-pill" class="pill">Room: —</span>
+    </header>
+    <div id="host-content" class="content"></div>
+  </section>
+
+  <!-- ============ PLAYER ============ -->
+  <section id="screen-player" class="screen">
+    <header class="topbar">
+      <span class="logo small">🕵️ Mafia Night</span>
+      <span id="player-room-pill" class="pill">Room: —</span>
+    </header>
+    <div id="player-content" class="content"></div>
+  </section>
+
+</div>
+
+<script src="js/vendor/peerjs.min.js"></script>
+<script src="js/roles.js"></script>
+<script src="js/host.js"></script>
+<script src="js/player.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
