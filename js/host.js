@@ -183,7 +183,10 @@ const Host = (() => {
   /* Everyone at the table — bots included — listens to what gets said.
    * Accusations raise a player's suspicion score, defenses lower it, and a
    * detective claim carries extra weight. Bots use the scores to vote. */
-  function bumpSuspicion(id, amt) { G.suspicion[id] = (G.suspicion[id] || 0) + amt; }
+  function bumpSuspicion(id, amt) {
+    // Clamp so no one becomes an unshakeable pariah (or untouchable saint).
+    G.suspicion[id] = Math.max(-6, Math.min(10, (G.suspicion[id] || 0) + amt));
+  }
 
   function reactToChat(speaker, text) {
     const lower = text.toLowerCase();
@@ -200,8 +203,10 @@ const Host = (() => {
       if (t.id === speaker.id) return;
       if (!lower.includes(t.name.toLowerCase())) return;
       mentioned.push(t);
-      if (defend) bumpSuspicion(t.id, detClaim ? -4 : -2);
-      else if (accuse) bumpSuspicion(t.id, detClaim ? 5 : 2);
+      // Bot chatter counts for less than a human's word, so bots echoing each
+      // other can't snowball one target into a permanent pile-on.
+      if (defend) bumpSuspicion(t.id, detClaim ? -4 : speaker.isBot ? -1 : -2);
+      else if (accuse) bumpSuspicion(t.id, detClaim ? 5 : speaker.isBot ? 1 : 2);
     });
     // Bots answer when spoken to (questions, greetings, or just their name).
     mentioned.filter(t => t.isBot && t.alive).forEach(bot => {
@@ -284,16 +289,26 @@ const Host = (() => {
     return rndOf(['Hmm. Noted.', 'Interesting theory…', 'I’m listening.', 'Go on…', 'Say that a little louder for the table.']);
   }
 
-  /* The most suspicious valid vote target for a bot, if any stands out. */
+  /* A suspicious valid target for a bot — weighted-random among everyone over
+   * the threshold (not always the single leader), and occasionally a fresh
+   * hunch about someone nobody is watching, so no player gets ignored. */
   function botSuspicionPick(b, minScore) {
     const cands = alivePlayers().filter(t =>
       t.id !== b.id && !(teamOf(b) === 'mafia' && teamOf(t) === 'mafia'));
-    let best = null;
-    cands.forEach(t => {
-      const s = G.suspicion[t.id] || 0;
-      if (s >= (minScore || 2) && (!best || s > (G.suspicion[best.id] || 0))) best = t;
-    });
-    return best;
+    if (!cands.length) return null;
+    const hot = cands.filter(t => (G.suspicion[t.id] || 0) >= (minScore || 2));
+    if (!hot.length) return null;
+    // 15% of the time, look past the noise at an unwatched player instead.
+    const cold = cands.filter(t => (G.suspicion[t.id] || 0) <= 0);
+    if (cold.length && Math.random() < 0.15) return rndOf(cold);
+    // Otherwise pick weighted by score, so runners-up still draw attention.
+    const total = hot.reduce((s, t) => s + (G.suspicion[t.id] || 0), 0);
+    let roll = Math.random() * total;
+    for (const t of hot) {
+      roll -= (G.suspicion[t.id] || 0);
+      if (roll <= 0) return t;
+    }
+    return hot[hot.length - 1];
   }
 
   /* Bots that already voted may switch when the mood turns hard. */
@@ -1267,7 +1282,8 @@ const Host = (() => {
       if (!fresh.length) return rndOf(T);
       let best = null;
       fresh.forEach(id => { if (!best || s(id) > s(best)) best = id; });
-      return s(best) >= 2 ? best : rndOf(fresh);               // chase the accusations
+      // Chase the accusations most nights; sometimes canvas the quiet ones.
+      return (s(best) >= 2 && Math.random() < 0.7) ? best : rndOf(fresh);
     }
     if (role === 'doctor' || role === 'bodyguard') {
       const pri = (G.protectPriority || []).find(id => inT(id));
@@ -1282,7 +1298,9 @@ const Host = (() => {
       return 'skip';
     }
     if (role === 'watcher' || role === 'tracker') {
-      return suspLeader(2) || rndOf(T);                        // keep eyes on the suspects
+      // Watch the suspects most nights, but sweep the quiet ones too.
+      const sus = suspLeader(2);
+      return (sus && Math.random() < 0.6) ? sus : rndOf(T);
     }
     if (role === 'coroner' || role === 'consigliere') {
       const seen = new Set((p.actions || []).filter(a => a.role === role && a.target).map(a => a.target));
