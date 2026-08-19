@@ -388,7 +388,7 @@ const Player = (() => {
         }
         const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
           <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>`;
-        return t.self
+        return (t.self || opts.readonly)
           ? `<div class="btn vote-line self-row">${inner}</div>`
           : `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
       }).join('')
@@ -551,24 +551,34 @@ const Player = (() => {
             <h2>You are dead</h2>
             <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
-      // One vote from beyond the grave, if the host enabled it — same voting
-      // interface as the living, just titled for the occasion.
-      if (view.phase === 'day' && view.vote && view.vote.ghost) {
+      // During the day the dead see the vote list (their ghost vote if they
+      // have one, read-only otherwise) — no separate players list.
+      if (view.phase === 'day' && view.vote) {
         const v = view.vote;
-        html += `<div class="card">
-          <div class="section-title"><h3>👻 Your last vote</h3>
-          <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-          <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day.
-          A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
-          ${v.ghostSaved ? '<p class="progress-note" style="margin-bottom:10px">💾 Saved for a later day — you can still change your mind below.</p>' : ''}
-          ${voteGridHTML(v, { retract: true })}
-          ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
-        </div>`;
-      } else if (view.phase === 'day' && view.vote && view.vote.ghostSpent) {
-        html += `<p class="progress-note">👻 Your last vote has been spent.</p>`;
+        if (v.ghost) {
+          html += `<div class="card">
+            <div class="section-title"><h3>👻 Your last vote</h3>
+            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+            <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day.
+            A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
+            ${v.ghostSaved ? '<p class="progress-note" style="margin-bottom:10px">💾 Saved for a later day — you can still change your mind below.</p>' : ''}
+            ${voteGridHTML(v, { retract: true })}
+            ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
+          </div>`;
+        } else {
+          html += `<div class="card">
+            <div class="section-title"><h3>🗳 The vote</h3>
+            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+            ${v.ghostSpent ? '<p class="muted small-text" style="margin-bottom:10px">👻 Your last vote has been spent.</p>' : ''}
+            ${voteGridHTML(v, { includeNobody: true, readonly: true })}
+            ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
+              : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
+          </div>`;
+        }
+        html += chatCardHTML();
+      } else {
+        html += playersListHTML(false);
       }
-      html += playersListHTML(view.phase === 'day');
-      if (view.phase === 'day') html += chatCardHTML();
     }
 
     /* ----- role confirmation before the first night ----- */
