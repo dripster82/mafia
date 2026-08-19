@@ -26,6 +26,7 @@ const Host = (() => {
   };
   let phaseTimer = null; // auto-advance timeout for the current phase
   let voteCloseTimer = null; // short pause between the last vote and the verdict
+  let verdictTimer = null;   // when the verdict screen moves on
 
   function deckOpts() {
     return { maxMafia: settings.maxMafia, roles: settings.roles };
@@ -958,8 +959,16 @@ const Host = (() => {
 
     G.phase = 'verdict';
     G.lastWords = null;
+    G.lastWordsDone = false;
     setPhaseTimer(0);
     broadcast();
+
+    // How the verdict ends: no elimination → short pause; a bot → after its
+    // line lands; a human → wait for their last words (say-nothing button or
+    // a 60s safety net if they've gone quiet).
+    if (!eliminated) scheduleVerdictEnd(5000);
+    else if (eliminated.isBot) scheduleVerdictEnd(15000);
+    else scheduleVerdictEnd(60000);
 
     if (eliminated && eliminated.isBot && !eliminated.forged) {
       const LAST_WORDS = {
@@ -985,34 +994,49 @@ const Host = (() => {
       setTimeout(() => {
         if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
           G.lastWords = line;
+          G.lastWordsDone = true;
           addLog(`${eliminated.name}'s last words: “${line}”`);
+          scheduleVerdictEnd(6000);
           broadcast();
         }
       }, 1500 + Math.random() * 1500);
     }
+  }
 
-    setTimeout(() => {
-      if (!G || G.phase !== 'verdict') return;
-      if (G.announce.eliminatedRole === 'jester') {
-        G.phase = 'ended';
-        G.winner = 'jester';
-        setPhaseTimer(0);
-        addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
-        broadcast();
-        return;
-      }
-      if (checkWin()) return;
-      startNight();
-    }, eliminated ? 12000 : 5000);
+  function scheduleVerdictEnd(ms) {
+    clearTimeout(verdictTimer);
+    verdictTimer = setTimeout(endVerdict, ms);
+  }
+
+  function endVerdict() {
+    if (!G || G.phase !== 'verdict') return;
+    if (G.announce.eliminatedRole === 'jester') {
+      G.phase = 'ended';
+      G.winner = 'jester';
+      setPhaseTimer(0);
+      addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
+      broadcast();
+      return;
+    }
+    if (checkWin()) return;
+    startNight();
   }
 
   /* One final message from a just-eliminated player, shown during the verdict.
    * The Forger's mark destroys it. */
   function handleLastWords(p, text) {
-    if (G.phase !== 'verdict' || G.lastWords) return;
+    if (G.phase !== 'verdict' || G.lastWords || G.lastWordsDone) return;
     if (!G.announce || G.announce.eliminatedId !== p.id) return;
+    if (text === '__skip__') {
+      G.lastWordsDone = true;
+      addLog(`${p.name} went quietly.`);
+      scheduleVerdictEnd(4000);
+      broadcast();
+      return;
+    }
     text = String(text || '').trim().slice(0, 100);
     if (!text) return;
+    G.lastWordsDone = true;
     if (p.forged) {
       G.lastWords = '🔥 …the paper burns before anyone can read it. The last words are destroyed.';
       addLog(`${p.name}'s last words were mysteriously destroyed.`);
@@ -1020,6 +1044,7 @@ const Host = (() => {
       G.lastWords = text;
       addLog(`${p.name}'s last words: “${text}”`);
     }
+    scheduleVerdictEnd(6000);
     broadcast();
   }
 
@@ -1493,7 +1518,9 @@ const Host = (() => {
     if (G.phase === 'verdict') {
       view.verdict = {
         lastWords: G.lastWords,
-        canSay: !!(G.announce && G.announce.eliminatedId === p.id && !G.lastWords),
+        canSay: !!(G.announce && G.announce.eliminatedId === p.id && !G.lastWords && !G.lastWordsDone),
+        waiting: !!(G.announce && G.announce.eliminatedId && !G.lastWords && !G.lastWordsDone),
+        waitingName: G.announce ? G.announce.eliminatedName : null,
       };
     }
 
@@ -1501,6 +1528,10 @@ const Host = (() => {
       view.recap = {
         timeline: G.log.filter(e => e.important).map(e => e.text),
         yours: (p.actions || []).slice(),
+        all: G.players.filter(x => !x.spectator && x.role).map(x => ({
+          name: x.name, avatar: x.avatar, role: x.role, you: x.id === p.id,
+          actions: (x.actions || []).slice(),
+        })),
       };
       view.extraWinners = extraWinners();
     }

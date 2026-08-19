@@ -528,12 +528,17 @@ const Player = (() => {
           <span class="muted small-text">— ${esc(a.eliminatedName || 'their')} last words</span></p></div>`;
       } else if (vd.canSay) {
         html += `<div class="card"><h3>🗣 Any last words?</h3>
+          <p class="muted small-text" style="margin-top:4px">Everyone is waiting to hear them.</p>
           <div class="chat-row" style="margin-top:8px">
             <input id="last-words-input" type="text" maxlength="100" placeholder="Say something memorable…" autocomplete="off">
             <button id="last-words-send" class="btn primary">Send</button>
-          </div></div>`;
+          </div>
+          <button id="last-words-skip" class="btn ghost" style="width:100%;margin-top:8px">🙊 Say nothing</button></div>`;
       }
-      html += `<p class="progress-note pulsing">Night falls in a moment…</p>`;
+      html += vd.waiting && !vd.canSay
+        ? `<p class="progress-note pulsing">🗣 Waiting for ${esc(vd.waitingName || 'their')}'s last words…</p>`
+        : vd.canSay ? ''
+        : `<p class="progress-note pulsing">Night falls in a moment…</p>`;
     }
 
     /* ----- dead player / late-joining spectator ----- */
@@ -671,20 +676,31 @@ const Player = (() => {
         }</div>`;
       }
       if (view.recap) {
-        if (view.recap.yours && view.recap.yours.length) {
-          const verbs = {
-            mafia: 'targeted', don: 'targeted', doctor: 'protected', detective: 'investigated',
-            vigilante: 'shot at', watcher: 'watched', tracker: 'followed', coroner: 'examined',
-            bodyguard: 'guarded', fixer: 'blocked', framer: 'framed', poisoner: 'poisoned',
-            consigliere: 'studied', forger: 'marked', recruiter: 'approached', mortician: 'raised',
-          };
-          const specials = { pledge: 'pledged to go public 📣', hide: 'lay low 🎒', clean: 'cleaned the kill 🧹' };
+        const verbs = {
+          mafia: 'targeted', don: 'targeted', doctor: 'protected', detective: 'investigated',
+          vigilante: 'shot at', watcher: 'watched', tracker: 'followed', coroner: 'examined',
+          bodyguard: 'guarded', fixer: 'blocked', framer: 'framed', poisoner: 'poisoned',
+          consigliere: 'studied', forger: 'marked', recruiter: 'approached', mortician: 'raised',
+        };
+        const specials = { pledge: 'pledged to go public 📣', hide: 'lay low 🎒', clean: 'cleaned the kill 🧹' };
+        const actionLine = x =>
+          `<div class="entry">Night ${x.night}: ${
+            x.special ? specials[x.special]
+            : x.skip ? 'did nothing'
+            : `${verbs[x.role] || 'chose'} ${esc(x.target)}${x.result ? ` → <strong>${esc(x.result)}</strong>` : ''}`
+          }</div>`;
+        if (view.recap.all && view.recap.all.length) {
+          html += `<div class="card"><h3>🌙 Everyone's nights</h3>${
+            view.recap.all.map(pl => `
+              <p class="small-text" style="margin:10px 0 4px"><strong>${pl.avatar || ''} ${esc(pl.name)}</strong>
+                <span class="muted">(${ROLES[pl.role].icon} ${ROLES[pl.role].name})</span>${pl.you ? ' (you)' : ''}</p>
+              ${pl.actions.length
+                ? `<div class="log">${pl.actions.map(actionLine).join('')}</div>`
+                : '<p class="muted small-text">slept soundly every night</p>'}`).join('')
+          }</div>`;
+        } else if (view.recap.yours && view.recap.yours.length) {
           html += `<div class="card"><h3>🌙 Your nights</h3><div class="log">${
-            view.recap.yours.map(x => `<div class="entry">Night ${x.night}: ${
-              x.special ? specials[x.special]
-              : x.skip ? 'did nothing'
-              : `${verbs[x.role] || 'chose'} ${esc(x.target)}${x.result ? ` → <strong>${esc(x.result)}</strong>` : ''}`
-            }</div>`).join('')
+            view.recap.yours.map(actionLine).join('')
           }</div></div>`;
         }
         if (view.recap.timeline && view.recap.timeline.length) {
@@ -787,6 +803,8 @@ const Player = (() => {
     if (lwi) lwi.onkeydown = e => {
       if (e.key === 'Enter' && lwi.value.trim()) sendAction({ t: 'lastWords', text: lwi.value });
     };
+    const lws = el('last-words-skip');
+    if (lws) lws.onclick = () => sendAction({ t: 'lastWords', text: '__skip__' });
     c.querySelectorAll('[data-pick-role]').forEach(b => {
       b.onclick = () => sendAction({ t: 'pickRole', role: b.dataset.pickRole });
     });
