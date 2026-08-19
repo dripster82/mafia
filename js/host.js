@@ -1361,11 +1361,11 @@ const Host = (() => {
         <div class="card"><h3>Extra roles</h3>
           <p class="hint" style="margin:4px 0 8px">Enabled roles join the deck when there are enough players (Villager seats are used first).
           ⚠️ Every mafia support role grows the mafia team — enable a similar number of village roles to keep the game fair.</p>
-          ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:8px 0 2px">${g.title}</p>` +
+          ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:10px 0 2px">${g.title}</p>` +
             g.roles.map(r => `
-              <label class="opt"><input type="checkbox" data-role-opt="${r}" ${settings.roles[r] ? 'checked' : ''}>
-                <span>${ROLES[r].icon} <strong>${ROLES[r].name}</strong>
-                <span class="muted small-text" title="${esc(ROLES[r].desc)}"> — ${esc(ROLES[r].desc.length > 90 ? ROLES[r].desc.slice(0, 90) + '…' : ROLES[r].desc)}</span></span></label>`).join('')
+              <label class="opt opt-role"><input type="checkbox" data-role-opt="${r}" ${settings.roles[r] ? 'checked' : ''}>
+                <span><strong>${ROLES[r].icon} ${ROLES[r].name}</strong><br>
+                <span class="muted small-text">${esc(ROLES[r].desc)}</span></span></label>`).join('')
           ).join('')}
         </div>`;
     }

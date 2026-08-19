@@ -114,6 +114,9 @@ input[type="text"]:focus { border-color: var(--accent); }
 /* Host game options */
 .opt { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 0.92rem; color: var(--text); }
 .opt input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); flex-shrink: 0; }
+.opt.opt-role { align-items: flex-start; }
+.opt.opt-role input[type="checkbox"] { margin-top: 2px; }
+.opt.opt-role .small-text { line-height: 1.45; }
 .opt select {
   background: var(--bg2); color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 10px; font-size: 0.92rem;
