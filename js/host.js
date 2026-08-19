@@ -19,8 +19,9 @@ const Host = (() => {
 
   function freshGame() {
     return {
-      phase: 'lobby',      // lobby | night | day | ended
+      phase: 'lobby',      // lobby | reveal | night | day | ended
       dayNum: 0,
+      confirms: {},        // reveal phase: playerId -> true once they've seen their role
       players: [],         // {id, name, role, alive, connected, causeOfDeath}
       night: null,         // {actions: {playerId: targetId}}
       votes: null,         // {playerId: targetId|'nobody'}
@@ -123,7 +124,9 @@ const Host = (() => {
     if (!G) return;
     const p = getPlayer(conn._playerId);
     if (!p || !p.alive) return;
-    if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)) {
+    if (G.phase === 'reveal' && !G.confirms[p.id]) {
+      handleConfirm(p);
+    } else if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)) {
       const ts = nightTargetsFor(p);
       if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
     } else if (G.phase === 'day' && !(p.id in G.votes)) {
@@ -168,6 +171,7 @@ const Host = (() => {
     if (msg.t === 'night') return handleNightAction(p, msg.target);
     if (msg.t === 'vote') return handleVote(p, msg.target);
     if (msg.t === 'profile') return handleProfile(p, msg);
+    if (msg.t === 'confirm') return handleConfirm(p);
   }
 
   /* Lobby-only: rename and avatar changes. */
@@ -238,7 +242,16 @@ const Host = (() => {
     const deck = buildRoleDeck(G.players.length);
     G.players.forEach((p, i) => { p.role = deck[i]; p.alive = true; });
     addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length)}).`, true);
-    startNight();
+    G.phase = 'reveal';
+    G.confirms = {};
+    broadcast();
+  }
+
+  function handleConfirm(p) {
+    if (G.phase !== 'reveal' || G.confirms[p.id]) return;
+    G.confirms[p.id] = true;
+    if (G.players.every(pl => G.confirms[pl.id])) startNight();
+    else broadcast();
   }
 
   function startNight() {
@@ -459,6 +472,13 @@ const Host = (() => {
       })),
     };
 
+    if (G.phase === 'reveal') {
+      view.reveal = {
+        confirmed: !!G.confirms[p.id],
+        waitingOn: G.players.filter(pl => !G.confirms[pl.id]).length,
+      };
+    }
+
     if (G.phase === 'night' && p.alive) {
       const prompt = ROLES[p.role].nightPrompt;
       view.night = {
@@ -541,6 +561,16 @@ const Host = (() => {
         </div>`;
     }
 
+    if (G.phase === 'reveal') {
+      const pending = G.players.filter(p => !G.confirms[p.id]).length;
+      html += `
+        <div class="card">
+          <h3>Host controls</h3>
+          <p class="muted small-text" style="margin:6px 0 10px">Waiting for ${pending} player${pending === 1 ? '' : 's'} to confirm their role.</p>
+          <button id="btn-force-reveal" class="btn" style="width:100%">⏭ Begin the first night now</button>
+        </div>`;
+    }
+
     if (G.phase === 'night') {
       const pending = nightActors().filter(p => !(p.id in G.night.actions)).length;
       html += `
@@ -578,6 +608,7 @@ const Host = (() => {
     on('btn-force-vote', () => { if (confirm('End voting now? Only votes already cast will count.')) forceEndVoting(); });
     on('btn-again', playAgain);
     on('btn-add-bot', addBot);
+    on('btn-force-reveal', () => { if (confirm('Begin the first night now, even though not everyone has confirmed?')) startNight(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
     });

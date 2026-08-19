@@ -123,8 +123,10 @@ const Player = (() => {
         investigations = [];
         roleRevealed = false;
       }
+      const prevPhase = view ? view.phase : null;
       view = msg.view;
       if (nameDraft !== null && view.you.name === nameDraft.trim()) nameDraft = null;
+      maybeAnimatePhase(prevPhase, view.phase, view.dayNum);
       render();
     } else if (msg.t === 'toast') {
       toastMsg = msg.msg;
@@ -140,6 +142,24 @@ const Player = (() => {
   }
 
   function sendAction(msg) { if (conn && conn.open) conn.send(msg); }
+
+  /* ---------------- day/night transition animation ---------------- */
+
+  function maybeAnimatePhase(prevPhase, phase, dayNum) {
+    if (prevPhase === null || prevPhase === phase) return;
+    let kind = null;
+    if (phase === 'night' && (prevPhase === 'reveal' || prevPhase === 'day')) kind = 'night';
+    if (phase === 'day' && prevPhase === 'night') kind = 'day';
+    if (!kind || document.querySelector('.phase-overlay')) return;
+    const ov = document.createElement('div');
+    ov.className = 'phase-overlay to-' + kind;
+    ov.innerHTML = `
+      <span class="orb setting">${kind === 'night' ? '☀️' : '🌙'}</span>
+      <span class="orb rising">${kind === 'night' ? '🌙' : '☀️'}</span>
+      <div class="phase-label">${kind === 'night' ? 'Night' : 'Day'} ${dayNum}</div>`;
+    document.body.appendChild(ov);
+    setTimeout(() => ov.remove(), 2400);
+  }
 
   /* ---------------- rendering ---------------- */
 
@@ -261,6 +281,20 @@ const Player = (() => {
       html += playersListHTML(view.phase === 'day');
     }
 
+    /* ----- role confirmation before the first night ----- */
+    else if (view.phase === 'reveal') {
+      html += `<div class="banner night"><span class="big-emoji">🎭</span>
+        <h2>The roles are dealt</h2>
+        <p class="muted">Tap your card to secretly view your role, then confirm you're ready.</p></div>`;
+      html += roleCardHTML(view.you.role, true);
+      if (view.reveal.confirmed) {
+        html += `<div class="card center"><p class="pulsing">✅ Ready. Waiting for ${view.reveal.waitingOn} more player${view.reveal.waitingOn === 1 ? '' : 's'}…</p></div>`;
+      } else {
+        html += `<button id="btn-confirm-role" class="btn primary big" ${roleRevealed ? '' : 'disabled'}>
+          ${roleRevealed ? "I've seen my role — I'm ready" : 'View your role first'}</button>`;
+      }
+    }
+
     /* ----- night ----- */
     else if (view.phase === 'night') {
       html += announceHTML();
@@ -303,7 +337,6 @@ const Player = (() => {
         }<button class="btn ${v.yourVote === 'nobody' ? 'selected' : ''}" data-vote="nobody">
           <span>🕊 No one</span>${v.counts.nobody ? `<span class="vote-count">${v.counts.nobody} 🗳</span>` : ''}</button>
         </div></div>`;
-      html += playersListHTML(true);
     }
 
     /* ----- game over ----- */
@@ -354,6 +387,8 @@ const Player = (() => {
     c.querySelectorAll('[data-vote]').forEach(b => {
       b.onclick = () => sendAction({ t: 'vote', target: b.dataset.vote });
     });
+    const cr = el('btn-confirm-role');
+    if (cr) cr.onclick = () => sendAction({ t: 'confirm' });
   }
 
   /* Resume a session after a page refresh, if one exists. */
