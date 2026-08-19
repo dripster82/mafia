@@ -365,15 +365,27 @@ const Player = (() => {
     }</div></div>`;
   }
 
-  /* The voting grid — identical for the living and for ghost votes. */
+  /* The voting grid — identical for the living and for ghost votes. Dead and
+   * voted-out players stay listed, greyed out and unclickable. */
   function voteGridHTML(v, opts) {
     opts = opts || {};
-    const rows = v.targets.map(t => ({ id: t.id, self: t.self, label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}` }));
+    const deadLabels = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding', mafia: 'killed' };
+    const rows = v.targets.map(t => ({
+      id: t.id, self: t.self, dead: t.dead, causeOfDeath: t.causeOfDeath, role: t.role,
+      label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}`,
+    }));
     if (opts.includeNobody) rows.push({ id: 'nobody', label: '🕊 No one' });
     return `<div class="target-grid">${
       rows.map(t => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
         const count = v.counts[t.id] ? `${v.counts[t.id]} 🗳` : '';
+        if (t.dead) {
+          const roleTag = t.role ? `${ROLES[t.role].icon} ` : '';
+          return `<div class="btn vote-line self-row dead-row">
+            <span class="vote-voters">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>
+            <span class="vote-target">${roleTag}${t.label}</span>
+          </div>`;
+        }
         const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
           <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>`;
         return t.self

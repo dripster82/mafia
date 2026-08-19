@@ -1367,7 +1367,13 @@ const Host = (() => {
         majority: Math.floor(aliveWeight / 2) + 1,
         ghost: ghostCanVote(p),
         ghostSpent: !p.alive && !p.spectator && !!p.ghostVoteUsed && settings.ghostVote,
-        targets: alivePlayers().map(t => ({ id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id })),
+        // The whole roster: the fallen stay in the list (not votable) so the
+        // day screen shows who's already gone.
+        targets: G.players.filter(t => !t.spectator).map(t => ({
+          id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id,
+          dead: !t.alive, causeOfDeath: t.alive ? null : t.causeOfDeath,
+          role: !t.alive && roleVisibleTo(p, t) && t.role ? t.role : null,
+        })),
       };
       view.chat = G.chat.slice(-50);
       view.canChat = p.alive;

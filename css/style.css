@@ -150,6 +150,8 @@ input[type="text"]:focus { border-color: var(--accent); }
 .vote-line .vote-target { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
 .vote-line.self-row { cursor: default; opacity: 0.85; border-style: dashed; display: flex; justify-content: space-between; align-items: center; }
 .vote-line.self-row:hover { filter: none; }
+.vote-line.dead-row { opacity: 0.45; border-style: solid; }
+.vote-line.dead-row .vote-target { text-decoration: line-through; }
 
 /* Profile editing */
 .profile-row { display: flex; gap: 8px; margin-top: 8px; }
