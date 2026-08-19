@@ -199,6 +199,10 @@ const Host = (() => {
     if (detClaim) (G.detClaimants = G.detClaimants || new Set()).add(speaker.id);
 
     const mentioned = [];
+    const preMentioned = alivePlayers().filter(t => t.id !== speaker.id && lower.includes(t.name.toLowerCase()));
+
+    // A false detective claim can draw out the real one.
+    if (detClaim) maybeCounterClaim(speaker, preMentioned[0] || null);
     alivePlayers().forEach(t => {
       if (t.id === speaker.id) return;
       if (!lower.includes(t.name.toLowerCase())) return;
@@ -254,6 +258,41 @@ const Host = (() => {
       }
     }
     maybeReconsiderVotes();
+  }
+
+  /* When someone claims detective and the REAL detective is a bot, the bot
+   * knows they're lying. It either calls them out or quietly marks them. */
+  function maybeCounterClaim(claimant, accused) {
+    const realDet = alivePlayers().find(x => x.isBot && x.role === 'detective');
+    if (!realDet || realDet.id === claimant.id) return;
+    if (realDet.counterDay === G.dayNum) return;
+    realDet.counterDay = G.dayNum;
+    // If the liar happened to accuse someone the real detective KNOWS is
+    // mafia, staying quiet and letting it ride is the smarter play.
+    if (accused && realDet.intel && realDet.intel.some(i => i.targetId === accused.id && i.isMafia)) {
+      bumpSuspicion(claimant.id, 1);
+      return;
+    }
+    if (Math.random() < 0.6) {
+      const clearedAccused = accused && realDet.intel &&
+        realDet.intel.some(i => i.targetId === accused.id && !i.isMafia);
+      setTimeout(() => {
+        if (!G || G.phase !== 'day' || !realDet.alive || !claimant.alive) return;
+        handleChat(realDet, clearedAccused
+          ? rndOf([
+              `Lies. I am the detective, and I investigated ${accused.name} myself — they're clean. So what are you playing at, ${claimant.name}?`,
+              `${claimant.name} is a fraud. The real detective — me — already cleared ${accused.name}.`,
+            ])
+          : rndOf([
+              `${claimant.name} is lying — I'M the detective. And now I know exactly who to watch.`,
+              `Interesting, ${claimant.name}… because the real detective is me. Care to explain yourself?`,
+              `That's false. I am the detective — and ${claimant.name} just made my suspect list.`,
+            ]));
+      }, 2500 + Math.random() * 3000);
+    } else {
+      // Stays hidden, but the liar becomes their prime suspect.
+      bumpSuspicion(claimant.id, 3);
+    }
   }
 
   /* What a bot says when directly addressed — consistent with how it votes. */
@@ -1255,6 +1294,15 @@ const Host = (() => {
           `I've been watching ${t.name} all night… it's them.`,
         ]);
       }
+      // A mafia killer may risk one FAKE detective claim per game to frame
+      // someone — gambling that the real detective stays quiet.
+      if ((p.role === 'mafia' || p.role === 'don') && !G.fakeClaimUsed && G.dayNum >= 2 && Math.random() < 0.15) {
+        G.fakeClaimUsed = true;
+        return rndOf([
+          `I'm the detective — ${t.name} is mafia. Vote them out!`,
+          `Detective here. My investigation says it's ${t.name}.`,
+        ]);
+      }
       if (p.role === 'executioner' && t.id === p.execTargetId) {
         return rndOf([
           `I've got a bad feeling about ${t.name}.`,
@@ -1325,6 +1373,10 @@ const Host = (() => {
       const seen = new Set((p.intel || []).map(i => i.targetId));
       const fresh = T.filter(id => !seen.has(id));
       if (!fresh.length) return rndOf(T);
+      // Anyone else claiming to be the detective is lying — check them first.
+      const fake = [...(G.detClaimants || [])].map(getPlayer)
+        .find(c => c && c.alive && c.id !== p.id && !seen.has(c.id) && inT(c.id));
+      if (fake) return fake.id;
       let best = null;
       fresh.forEach(id => { if (!best || s(id) > s(best)) best = id; });
       // Chase the accusations most nights; sometimes canvas the quiet ones.
