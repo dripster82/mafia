@@ -21,6 +21,7 @@ const Player = (() => {
   let toastTimer = null;
   let chatDraft = '';              // in-progress chat message, survives re-renders
   let phaseTickInterval = null;    // 1s countdown updater for the phase timer
+  let lastTurnKey = null;          // chime once when it's your turn to act
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -272,6 +273,11 @@ const Player = (() => {
       view = msg.view;
       if (nameDraft !== null && view.you.name === nameDraft.trim()) nameDraft = null;
       maybeAnimatePhase(prevPhase, view.phase, view.dayNum);
+      // A soft cue the first time each night that YOU have an action pending.
+      if (view.phase === 'night' && view.night && view.night.prompt && !view.night.acted) {
+        const key = 'night' + view.dayNum;
+        if (key !== lastTurnKey) { lastTurnKey = key; if (prevPhase !== null) Sound.play('turn'); }
+      }
       render();
     } else if (msg.t === 'toast') {
       toastMsg = msg.msg;
@@ -295,7 +301,9 @@ const Player = (() => {
     let kind = null;
     if (phase === 'night' && (prevPhase === 'reveal' || prevPhase === 'day' || prevPhase === 'verdict')) kind = 'night';
     if (phase === 'day' && prevPhase === 'night') kind = 'day';
+    if (phase === 'ended') Sound.play('win');
     if (!kind || document.querySelector('.phase-overlay')) return;
+    Sound.play(kind);
     const ov = document.createElement('div');
     ov.className = 'phase-overlay to-' + kind;
     ov.innerHTML = `
@@ -330,7 +338,7 @@ const Player = (() => {
     return `<div id="role-card" class="role-card team-${r.team}">
       <div class="role-icon">${r.icon}</div>
       <div class="role-name">${r.name}</div>
-      <div class="role-team ${r.team}">Team ${r.team === 'mafia' ? 'Mafia' : 'Town'}</div>
+      <div class="role-team ${r.team}">${r.team === 'mafia' ? 'Team Mafia' : r.team === 'jester' ? 'Neutral — wins alone' : 'Team Town'}</div>
       <div class="role-desc">${r.desc}</div>
       ${concealable ? '<div class="hint">Tap to hide</div>' : ''}
     </div>`;
@@ -342,9 +350,10 @@ const Player = (() => {
       view.players.map(p => {
         const role = p.role ? `<span class="role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>` : '';
         const votes = withVotes && counts[p.id] ? `<span class="vote-count">${counts[p.id]} 🗳</span>` : '';
-        const dead = !p.alive ? `<span class="status">${p.causeOfDeath === 'vote' ? 'voted out' : 'killed'}</span>` : '';
+        const dead = !p.alive
+          ? `<span class="status">${p.spectator ? '👁 spectating' : p.causeOfDeath === 'vote' ? 'voted out' : p.causeOfDeath === 'vigilante' ? 'shot' : 'killed'}</span>` : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
-          ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : '<span class="skull">💀</span>'}
+          ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
           <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
           ${role}${votes}${dead}</div>`;
       }).join('')
@@ -386,21 +395,19 @@ const Player = (() => {
     const a = view.announce;
     if (!a) return '';
     if (view.phase === 'day' && a.kind === 'dawn') {
-      if (a.killedName) {
-        return `<div class="banner death"><span class="big-emoji">💀</span>
-          <p><strong>${esc(a.killedName)}</strong> was killed in the night.<br>
-          They were the <strong>${ROLES[a.killedRole].name}</strong>.</p></div>`;
-      }
-      if (a.woundedName) {
-        return `<div class="banner death"><span class="big-emoji">🩹</span>
-          <p><strong>${esc(a.woundedName)}</strong> was wounded in the night — but survived!</p></div>`;
-      }
-      if (a.savedName) {
-        return `<div class="banner day"><span class="big-emoji">💉</span>
-          <p><strong>${esc(a.savedName)}</strong> was attacked, but the doctor saved them!</p></div>`;
-      }
-      return `<div class="banner day"><span class="big-emoji">${a.saved ? '💉' : '🌤'}</span>
-        <p>${a.saved ? 'The mafia struck, but the doctor saved their target — no one died!' : 'No one died in the night.'}</p></div>`;
+      const parts = [];
+      (a.killed || []).forEach(k => parts.push(
+        `<strong>${esc(k.name)}</strong> was ${k.cause === 'vigilante' ? 'shot' : 'killed'} in the night —
+         they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`));
+      if (a.woundedNames && a.woundedNames.length) parts.push(
+        `<strong>${a.woundedNames.map(esc).join(' and ')}</strong> ${a.woundedNames.length > 1 ? 'were' : 'was'} wounded in the night — but survived!`);
+      if (a.savedName) parts.push(`<strong>${esc(a.savedName)}</strong> was attacked, but the doctor saved them!`);
+      else if (a.saved) parts.push('The doctor saved someone from an attack in the night!');
+      if (!parts.length) parts.push('No one died in the night.');
+      const grim = (a.killed && a.killed.length) || (a.woundedNames && a.woundedNames.length);
+      return `<div class="banner ${grim ? 'death' : 'day'}">
+        <span class="big-emoji">${a.killed && a.killed.length ? '💀' : a.woundedNames && a.woundedNames.length ? '🩹' : a.saved ? '💉' : '🌤'}</span>
+        <p>${parts.join('</p><p>')}</p></div>`;
     }
     if (view.phase === 'night' && a.kind === 'verdict' && view.dayNum > 1) {
       if (a.eliminatedName) {
@@ -474,14 +481,29 @@ const Player = (() => {
             : a.noMajority ? 'No majority was reached.'
             : 'The village chose to spare everyone.'}</p></div>`;
       }
+      const vd = view.verdict || {};
+      if (vd.lastWords) {
+        html += `<div class="card center"><p>🗣 <em>“${esc(vd.lastWords)}”</em><br>
+          <span class="muted small-text">— ${esc(a.eliminatedName || 'their')} last words</span></p></div>`;
+      } else if (vd.canSay) {
+        html += `<div class="card"><h3>🗣 Any last words?</h3>
+          <div class="chat-row" style="margin-top:8px">
+            <input id="last-words-input" type="text" maxlength="100" placeholder="Say something memorable…" autocomplete="off">
+            <button id="last-words-send" class="btn primary">Send</button>
+          </div></div>`;
+      }
       html += `<p class="progress-note pulsing">Night falls in a moment…</p>`;
     }
 
-    /* ----- dead spectator ----- */
+    /* ----- dead player / late-joining spectator ----- */
     else if (view.phase !== 'ended' && !view.you.alive) {
-      html += `<div class="banner death"><span class="big-emoji">👻</span>
-        <h2>You are dead</h2>
-        <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
+      html += view.you.spectator
+        ? `<div class="banner night"><span class="big-emoji">👁</span>
+            <h2>You're spectating</h2>
+            <p class="muted">This game is in progress — watch along, and you'll be dealt in automatically when the next one starts.</p></div>`
+        : `<div class="banner death"><span class="big-emoji">👻</span>
+            <h2>You are dead</h2>
+            <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
       html += playersListHTML(view.phase === 'day');
       if (view.phase === 'day') html += chatCardHTML();
@@ -527,12 +549,12 @@ const Player = (() => {
       if (!n.prompt) {
         html += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p></div>`;
       } else if (n.acted) {
-        html += `<div class="card center"><p>✅ You chose <strong>${esc(n.actionTarget)}</strong>.</p>
+        html += `<div class="card center"><p>${n.heldFire ? '🕊 You held your fire.' : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`}</p>
           <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p></div>`;
       } else {
         html += `<div class="card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
           n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
-        }</div></div>`;
+        }${n.canSkip ? '<button class="btn ghost" data-night="skip">🕊 Hold your fire (keep your bullet)</button>' : ''}</div></div>`;
       }
     }
 
@@ -567,7 +589,11 @@ const Player = (() => {
 
     /* ----- game over ----- */
     else if (view.phase === 'ended') {
-      const won = (view.winner === 'mafia') === (ROLES[view.you.role].team === 'mafia');
+      const myTeam = view.you.role ? ROLES[view.you.role].team : null;
+      const won = !view.you.spectator && (
+        view.winner === 'jester' ? view.you.role === 'jester'
+        : myTeam === 'jester' ? false
+        : (view.winner === 'mafia') === (myTeam === 'mafia'));
       if (won) {
         let pieces = '';
         for (let i = 0; i < 36; i++) {
@@ -577,11 +603,29 @@ const Player = (() => {
         }
         html += `<div class="confetti-box" aria-hidden="true">${pieces}</div>`;
       }
-      html += `<div class="banner win"><span class="big-emoji">${view.winner === 'town' ? '🎉' : '🔪'}</span>
-        <h2>${view.winner === 'town' ? 'The town wins!' : 'The mafia win!'}</h2>
-        <p>${won ? 'Your team won! 🏆' : 'Your team lost this time.'}
-        You were the <strong>${ROLES[view.you.role].name}</strong>.</p>
+      html += `<div class="banner win"><span class="big-emoji">${view.winner === 'town' ? '🎉' : view.winner === 'jester' ? '🃏' : '🔪'}</span>
+        <h2>${view.winner === 'town' ? 'The town wins!' : view.winner === 'jester' ? 'The Jester wins!' : 'The mafia win!'}</h2>
+        <p>${view.you.spectator
+          ? 'Thanks for watching — you\'ll be dealt in next game.'
+          : `${won ? 'You won! 🏆' : view.winner === 'jester' ? 'You all got played…' : 'Your team lost this time.'}
+             You were the <strong>${ROLES[view.you.role].icon} ${ROLES[view.you.role].name}</strong>.`}</p>
         <p class="muted small-text">If the host starts a new game, you'll join it automatically.</p></div>`;
+
+      if (view.recap) {
+        if (view.recap.yours && view.recap.yours.length) {
+          const verbs = { mafia: 'targeted', doctor: 'protected', detective: 'investigated', vigilante: 'shot at' };
+          html += `<div class="card"><h3>🌙 Your nights</h3><div class="log">${
+            view.recap.yours.map(x => `<div class="entry">Night ${x.night}: ${
+              x.skip ? 'held your fire' : `${verbs[x.role] || 'chose'} ${esc(x.target)}${x.result ? ` → <strong>${x.result}</strong>` : ''}`
+            }</div>`).join('')
+          }</div></div>`;
+        }
+        if (view.recap.timeline && view.recap.timeline.length) {
+          html += `<div class="card"><h3>📜 How it went</h3><div class="log">${
+            view.recap.timeline.map(txt => `<div class="entry">${esc(txt)}</div>`).join('')
+          }</div></div>`;
+        }
+      }
       html += playersListHTML(false);
     }
 
@@ -667,6 +711,15 @@ const Player = (() => {
     });
     const cr = el('btn-confirm-role');
     if (cr) cr.onclick = () => sendAction({ t: 'confirm' });
+    const lw = el('last-words-send');
+    if (lw) lw.onclick = () => {
+      const inp = el('last-words-input');
+      if (inp && inp.value.trim()) sendAction({ t: 'lastWords', text: inp.value });
+    };
+    const lwi = el('last-words-input');
+    if (lwi) lwi.onkeydown = e => {
+      if (e.key === 'Enter' && lwi.value.trim()) sendAction({ t: 'lastWords', text: lwi.value });
+    };
     c.querySelectorAll('[data-pick-role]').forEach(b => {
       b.onclick = () => sendAction({ t: 'pickRole', role: b.dataset.pickRole });
     });

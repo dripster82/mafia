@@ -104,6 +104,14 @@ const App = (() => {
       el('join-name').focus();
     }
 
+    // Sound: unlock audio on the first tap (iOS requires a user gesture),
+    // and wire the mute toggles.
+    document.addEventListener('pointerdown', () => Sound.ensure(), { once: true });
+    const muteButtons = document.querySelectorAll('.btn-mute');
+    const syncMute = () => muteButtons.forEach(b => { b.textContent = Sound.isMuted() ? '🔇' : '🔊'; });
+    muteButtons.forEach(b => { b.onclick = () => { Sound.toggle(); syncMute(); }; });
+    syncMute();
+
     // Warn the host before accidentally leaving mid-game.
     window.addEventListener('beforeunload', e => {
       if (el('screen-host').classList.contains('active')) {

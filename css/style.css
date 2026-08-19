@@ -181,6 +181,7 @@ input[type="text"]:focus { border-color: var(--accent); }
 .player-row .role-tag { font-size: 0.8rem; font-weight: 700; }
 .player-row .role-tag.mafia { color: var(--accent); }
 .player-row .role-tag.town { color: var(--good); }
+.player-row .role-tag.jester { color: #b58ae6; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .skull { flex-shrink: 0; font-size: 0.9rem; }
 .dot.on { background: var(--good); }
@@ -197,10 +198,12 @@ input[type="text"]:focus { border-color: var(--accent); }
 .role-card .role-team { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
 .role-card .role-team.mafia { color: var(--accent); }
 .role-card .role-team.town { color: var(--good); }
+.role-card .role-team.jester { color: #b58ae6; }
 .role-card .role-desc { color: var(--muted); margin-top: 10px; line-height: 1.5; font-size: 0.92rem; }
 .role-card.concealed { background: repeating-linear-gradient(135deg, #1e2230, #1e2230 12px, #222639 12px, #222639 24px); }
 .role-card.team-mafia { border-color: #6b3038; box-shadow: 0 0 28px rgba(224, 67, 63, 0.22) inset, 0 0 18px rgba(224, 67, 63, 0.18); }
 .role-card.team-town { border-color: #2e5c44; box-shadow: 0 0 28px rgba(76, 175, 125, 0.18) inset, 0 0 18px rgba(76, 175, 125, 0.14); }
+.role-card.team-jester { border-color: #5a4180; box-shadow: 0 0 28px rgba(181, 138, 230, 0.2) inset, 0 0 18px rgba(181, 138, 230, 0.15); }
 
 /* Target / vote buttons */
 .target-grid { display: flex; flex-direction: column; gap: 8px; }

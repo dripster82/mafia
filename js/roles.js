@@ -25,6 +25,22 @@ const ROLES = {
     desc: 'Each night, investigate one person and learn whether they are mafia. Use your findings to guide the town — carefully.',
     nightPrompt: 'Choose someone to investigate tonight',
   },
+  vigilante: {
+    id: 'vigilante',
+    name: 'Vigilante',
+    team: 'town',
+    icon: '🔫',
+    desc: 'You have one bullet for the whole game. Any night, you may shoot someone you suspect — or hold your fire. Choose wisely: killing a townsperson helps the mafia.',
+    nightPrompt: 'Shoot someone — or hold your fire',
+  },
+  jester: {
+    id: 'jester',
+    name: 'Jester',
+    team: 'jester',
+    icon: '🃏',
+    desc: 'You win alone if the village votes you out. Act suspicious — but not too suspicious. You don’t care who else wins; being eliminated by vote is your victory.',
+    nightPrompt: null,
+  },
   villager: {
     id: 'villager',
     name: 'Villager',
@@ -68,14 +84,23 @@ function mafiaCount(n, maxMafia) {
   return maxMafia ? Math.min(auto, maxMafia) : auto;
 }
 
+/* Which roles a game of n players gets, given the host's options. */
+function deckComposition(n, opts) {
+  opts = opts || {};
+  const nMafia = mafiaCount(n, opts.maxMafia);
+  const comp = { mafia: nMafia, doctor: 1, detective: 1 };
+  let used = nMafia + 2;
+  if (opts.vigilante && n > used) { comp.vigilante = 1; used++; }
+  if (opts.jester && n > used) { comp.jester = 1; used++; }
+  comp.villager = n - used;
+  return comp;
+}
+
 /* Build and shuffle the role deck for n players. */
-function buildRoleDeck(n, maxMafia) {
+function buildRoleDeck(n, opts) {
+  const comp = deckComposition(n, opts);
   const deck = [];
-  const nMafia = mafiaCount(n, maxMafia);
-  for (let i = 0; i < nMafia; i++) deck.push('mafia');
-  deck.push('doctor');
-  deck.push('detective');
-  while (deck.length < n) deck.push('villager');
+  Object.keys(comp).forEach(r => { for (let i = 0; i < comp[r]; i++) deck.push(r); });
   // Fisher-Yates shuffle
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -84,10 +109,12 @@ function buildRoleDeck(n, maxMafia) {
   return deck;
 }
 
-function roleSummary(n, maxMafia) {
-  const nMafia = mafiaCount(n, maxMafia);
-  const nVillagers = n - nMafia - 2;
-  const parts = [`${nMafia} Mafia`, '1 Doctor', '1 Detective'];
-  if (nVillagers > 0) parts.push(`${nVillagers} Villager${nVillagers > 1 ? 's' : ''}`);
+function roleSummary(n, opts) {
+  const comp = deckComposition(n, opts);
+  const parts = [];
+  Object.keys(comp).forEach(r => {
+    if (!comp[r]) return;
+    parts.push(`${comp[r]} ${ROLES[r].name}${comp[r] > 1 && r === 'villager' ? 's' : ''}`);
+  });
   return parts.join(' · ');
 }

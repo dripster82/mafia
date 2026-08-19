@@ -14,7 +14,11 @@ const Host = (() => {
   let localConn = null; // the host's own loopback connection
   let hostName = null;
   let G = null;        // game state
-  let settings = { safeFirstNight: true, maxMafia: 0, showVoters: true, noSelfHeal: false, nightTimer: 120, dayTimer: 300 }; // survives new games
+  let settings = { safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false, vigilante: false, jester: false, nightTimer: 120, dayTimer: 300 }; // survives new games
+
+  function deckOpts() {
+    return { maxMafia: settings.maxMafia, vigilante: settings.vigilante, jester: settings.jester };
+  }
   let phaseTimer = null; // auto-advance timeout for the current phase
 
   /* Arm (or clear, with seconds=0) the current phase's auto-advance timer. */
@@ -37,7 +41,8 @@ const Host = (() => {
       votes: null,         // {playerId: targetId|'nobody'}
       announce: null,      // latest event to show players
       winner: null,
-      chat: [],            // day-phase table talk, cleared each night
+      lastWords: null,     // final message from a vote-eliminated player
+      chat: [],            // lobby + day table talk, cleared each night
       log: [],             // public information only — the host can read this
     };
   }
@@ -207,6 +212,15 @@ const Host = (() => {
       return rndOf(['It wasn’t me, I promise!', 'I was asleep all night, honest.', 'Let’s not rush this vote.']);
     }
 
+    if (p.role === 'jester' && r < 0.45) {
+      return rndOf([
+        'Honestly? It could easily be me. Who knows! 😏',
+        'I’m not saying it’s me… but I’m not NOT saying it.',
+        'Vote for whoever you want. Even me. ESPECIALLY me— I mean, no one.',
+        '*whistles suspiciously*',
+      ]);
+    }
+
     if (p.role === 'doctor' && G.announce && G.announce.kind === 'dawn' &&
         (G.announce.saved || G.announce.savedName) && r < 0.4) {
       return rndOf([
@@ -225,9 +239,20 @@ const Host = (() => {
     if (!p || !p.alive) return;
     if (G.phase === 'reveal' && !G.confirms[p.id]) {
       handleConfirm(p);
-    } else if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)) {
-      const ts = nightTargetsFor(p);
-      if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
+    } else if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)
+               && !(p.role === 'vigilante' && p.usedShot)) {
+      if (p.role === 'vigilante') {
+        // Bots mostly keep their one bullet unless they have little to lose.
+        if (Math.random() < 0.65) handleNightAction(p, 'skip');
+        else {
+          const ts = nightTargetsFor(p);
+          if (ts.length) handleNightAction(p, rndOf(ts).id);
+          else handleNightAction(p, 'skip');
+        }
+      } else {
+        const ts = nightTargetsFor(p);
+        if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
+      }
     } else if (G.phase === 'day') {
       // Talk first, vote on a later tick.
       if (conn._chatDay !== G.dayNum) {
@@ -294,6 +319,7 @@ const Host = (() => {
     if (msg.t === 'confirm') return handleConfirm(p);
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
     if (msg.t === 'chat') return handleChat(p, msg.text);
+    if (msg.t === 'lastWords') return handleLastWords(p, msg.text);
   }
 
   /* Table talk: lobby (waiting banter) and day (discussion). Only living
@@ -342,20 +368,19 @@ const Host = (() => {
         return;
       }
     } else {
-      if (G.phase !== 'lobby') {
-        conn.send({ t: 'error', fatal: true, msg: 'This game has already started.' });
-        return;
-      }
       if (G.players.some(pl => pl.name.toLowerCase() === name.toLowerCase())) {
         conn.send({ t: 'error', fatal: true, msg: 'That name is taken — pick another.' });
         return;
       }
+      const midGame = G.phase !== 'lobby';
       p = {
         id: 'p' + Math.random().toString(36).slice(2, 10),
-        name, role: null, alive: true, connected: true, causeOfDeath: null,
+        name, role: null, alive: !midGame, connected: true, causeOfDeath: null,
         avatar: AVATARS[G.players.length % AVATARS.length],
+        spectator: midGame, // late joiners watch this game and play the next
       };
       G.players.push(p);
+      if (midGame) addLog(`${name} joined as a spectator.`);
     }
 
     p.connected = true;
@@ -372,9 +397,9 @@ const Host = (() => {
     if (connected.length < MIN_PLAYERS) return;
     // Drop anyone who left the lobby before start.
     G.players = connected;
-    const deck = buildRoleDeck(G.players.length, settings.maxMafia);
-    G.players.forEach((p, i) => { p.role = deck[i]; p.alive = true; });
-    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, settings.maxMafia)}).`, true);
+    const deck = buildRoleDeck(G.players.length, deckOpts());
+    G.players.forEach((p, i) => { p.role = deck[i]; p.alive = true; p.usedShot = false; p.actions = []; p.intel = []; });
+    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, deckOpts())}).`, true);
     G.phase = 'reveal';
     G.confirms = {};
     setPhaseTimer(0);
@@ -400,7 +425,7 @@ const Host = (() => {
   function handleConfirm(p) {
     if (G.phase !== 'reveal' || G.confirms[p.id]) return;
     G.confirms[p.id] = true;
-    if (G.players.every(pl => G.confirms[pl.id])) startNight();
+    if (G.players.filter(pl => !pl.spectator).every(pl => G.confirms[pl.id])) startNight();
     else broadcast();
   }
 
@@ -416,20 +441,33 @@ const Host = (() => {
   }
 
   function nightActors() {
-    return alivePlayers().filter(p => ROLES[p.role].nightPrompt);
+    return alivePlayers().filter(p =>
+      ROLES[p.role].nightPrompt && !(p.role === 'vigilante' && p.usedShot));
   }
 
   function handleNightAction(p, targetId) {
     if (G.phase !== 'night' || !p.alive || !ROLES[p.role].nightPrompt) return;
-    const validTargets = nightTargetsFor(p).map(t => t.id);
-    if (!validTargets.includes(targetId)) return;
+    if (p.role === 'vigilante' && p.usedShot) return;
+    const skip = p.role === 'vigilante' && targetId === 'skip';
+    if (!skip) {
+      const validTargets = nightTargetsFor(p).map(t => t.id);
+      if (!validTargets.includes(targetId)) return;
+    }
     G.night.actions[p.id] = targetId;
+
+    // Personal recap for the end-of-game screen.
+    (p.actions = p.actions || []).push({
+      night: G.dayNum, role: p.role,
+      target: skip ? null : nameOf(targetId), skip,
+      result: null,
+    });
 
     // A detective learns the result as soon as they investigate.
     // (Kept out of the game log — the host is a player and must not see it.)
     if (p.role === 'detective') {
       const target = getPlayer(targetId);
       const isMafia = target.role === 'mafia';
+      p.actions[p.actions.length - 1].result = isMafia ? 'mafia' : 'not mafia';
       if (p.isBot) (p.intel = p.intel || []).push({ targetId, isMafia });
       send(p.id, { t: 'investigation', name: target.name, isMafia });
     }
@@ -442,6 +480,7 @@ const Host = (() => {
     if (p.role === 'mafia') return alivePlayers().filter(t => t.role !== 'mafia');
     if (p.role === 'doctor') return alivePlayers().filter(t => !settings.noSelfHeal || t.id !== p.id);
     if (p.role === 'detective') return alivePlayers().filter(t => t.id !== p.id);
+    if (p.role === 'vigilante' && !p.usedShot) return alivePlayers().filter(t => t.id !== p.id);
     return [];
   }
 
@@ -474,39 +513,52 @@ const Host = (() => {
     const doctor = alivePlayers().find(p => p.role === 'doctor');
     const savedId = doctor ? G.night.actions[doctor.id] : null;
 
-    let killed = null;
+    // Vigilante shots (one bullet per game, spent only when fired).
+    const shots = [];
+    alivePlayers().filter(p => p.role === 'vigilante').forEach(v => {
+      const t = G.night.actions[v.id];
+      if (t && t !== 'skip') { v.usedShot = true; shots.push(t); }
+    });
+
+    const deaths = new Map(); // targetId -> cause
     let saved = false;
     let savedName = null;
-    let wounded = null;
     if (killTarget) {
-      if (killTarget === savedId) {
-        saved = true;
-        // Only the first night reveals WHO the doctor saved.
-        if (G.dayNum === 1) {
-          savedName = getPlayer(killTarget).name;
-          addLog(`${savedName} was attacked, but the doctor saved them!`, true);
-        } else {
-          addLog(`The mafia struck, but the doctor saved their target!`, true);
-        }
-      } else if (G.dayNum === 1 && settings.safeFirstNight) {
-        wounded = getPlayer(killTarget);
-        addLog(`${wounded.name} was wounded in the night, but survived!`, true);
-      } else {
-        const victim = getPlayer(killTarget);
-        victim.alive = false;
-        victim.causeOfDeath = 'mafia';
-        killed = victim;
-        addLog(`${victim.name} was killed in the night. They were the ${ROLES[victim.role].name}.`, true);
-      }
+      if (killTarget === savedId) saved = true;
+      else deaths.set(killTarget, 'mafia');
+    }
+    shots.forEach(t => {
+      if (t === savedId) saved = true;
+      else if (!deaths.has(t)) deaths.set(t, 'vigilante');
+    });
+
+    const killed = [];
+    const woundedNames = [];
+    if (deaths.size && G.dayNum === 1 && settings.safeFirstNight) {
+      deaths.forEach((cause, id) => woundedNames.push(nameOf(id)));
+      addLog(`${woundedNames.join(' and ')} ${woundedNames.length > 1 ? 'were' : 'was'} wounded in the night, but survived!`, true);
     } else {
-      addLog(forced ? 'The night was ended early — no one was attacked.' : 'The mafia took no action tonight.');
+      deaths.forEach((cause, id) => {
+        const victim = getPlayer(id);
+        victim.alive = false;
+        victim.causeOfDeath = cause;
+        killed.push({ name: victim.name, role: victim.role, cause });
+        addLog(`${victim.name} was ${cause === 'vigilante' ? 'shot' : 'killed'} in the night. They were the ${ROLES[victim.role].name}.`, true);
+      });
+    }
+    if (saved) {
+      // Only the first night reveals WHO the doctor saved.
+      if (G.dayNum === 1) savedName = nameOf(savedId);
+      addLog(savedName ? `${savedName} was attacked, but the doctor saved them!` : 'The doctor saved someone from an attack in the night!', true);
+    }
+    if (!killTarget && !shots.length) {
+      addLog(forced ? 'The night was ended early — no one was attacked.' : 'The night passed quietly.');
     }
 
     G.announce = {
       kind: 'dawn',
-      killedName: killed ? killed.name : null,
-      killedRole: killed ? killed.role : null,
-      woundedName: wounded ? wounded.name : null,
+      killed,
+      woundedNames,
       savedName,
       saved,
     };
@@ -565,20 +617,60 @@ const Host = (() => {
       kind: 'verdict',
       eliminatedName: eliminated ? eliminated.name : null,
       eliminatedRole: eliminated ? eliminated.role : null,
+      eliminatedId: eliminated ? eliminated.id : null,
       tied: !eliminated && !noMajority && top.length > 1,
       noMajority,
       forced: !!forced,
     };
 
-    // Show the verdict to everyone for a few seconds before moving on.
+    // Show the verdict to everyone before moving on — longer when someone
+    // was eliminated, so they can leave last words.
     G.phase = 'verdict';
+    G.lastWords = null;
     setPhaseTimer(0);
     broadcast();
+
+    // A bot's last words arrive after a beat.
+    if (eliminated && eliminated.isBot) {
+      const line = eliminated.role === 'mafia'
+        ? rndOf(['You got me. Well played, town. 🔪', 'Fine, it was me. But my partner is still out there… or are they?'])
+        : eliminated.role === 'jester'
+          ? rndOf(['HA! You absolute fools — this is EXACTLY what I wanted! 🃏', 'Thank you, thank you! You played right into my hands! 🃏'])
+          : rndOf(['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!', 'I told you it wasn’t me…']);
+      setTimeout(() => {
+        if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
+          G.lastWords = line;
+          addLog(`${eliminated.name}'s last words: “${line}”`);
+          broadcast();
+        }
+      }, 1500 + Math.random() * 1500);
+    }
+
     setTimeout(() => {
       if (!G || G.phase !== 'verdict') return;
+      // The Jester wins alone by getting voted out.
+      if (G.announce.eliminatedRole === 'jester') {
+        G.phase = 'ended';
+        G.winner = 'jester';
+        setPhaseTimer(0);
+        addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
+        broadcast();
+        return;
+      }
       if (checkWin()) return;
       startNight();
-    }, 5000);
+    }, eliminated ? 12000 : 5000);
+  }
+
+  /* One final message from a just-eliminated player, shown during the verdict. */
+  function handleLastWords(p, text) {
+    if (G.phase !== 'verdict' || G.lastWords) return;
+    if (!G.announce || G.announce.eliminatedId !== p.id) return;
+    text = String(text || '').trim().slice(0, 100);
+    if (!text) return;
+    G.lastWords = text;
+    addLog(`${p.name}'s last words: “${text}”`);
+    broadcast();
   }
 
   function checkWin() {
@@ -604,6 +696,7 @@ const Host = (() => {
     const keep = G.players.filter(p => p.connected);
     G = freshGame();
     setPhaseTimer(0);
+    // Spectators are dealt in for the next game.
     G.players = keep.map(p => ({
       id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
       avatar: p.avatar, isBot: p.isBot,
@@ -645,18 +738,20 @@ const Host = (() => {
       minPlayers: MIN_PLAYERS,
       winner: G.winner,
       announce: G.announce,
-      roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, settings.maxMafia) : null,
+      roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, deckOpts()) : null,
       settings: {
         safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
-        noSelfHeal: settings.noSelfHeal, nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+        noSelfHeal: settings.noSelfHeal, vigilante: settings.vigilante, jester: settings.jester,
+        nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
       },
       timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
       you: {
-        id: p.id, name: p.name, alive: p.alive, avatar: p.avatar,
+        id: p.id, name: p.name, alive: p.alive, avatar: p.avatar, spectator: !!p.spectator,
         role: G.phase === 'lobby' ? null : p.role,
       },
       players: G.players.map(t => ({
         id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
+        spectator: !!t.spectator,
         role: roleVisibleTo(p, t) && G.phase !== 'lobby' ? t.role : null,
         causeOfDeath: t.alive ? null : t.causeOfDeath,
       })),
@@ -665,16 +760,18 @@ const Host = (() => {
     if (G.phase === 'reveal') {
       view.reveal = {
         confirmed: !!G.confirms[p.id],
-        waitingOn: G.players.filter(pl => !G.confirms[pl.id]).length,
+        waitingOn: G.players.filter(pl => !pl.spectator && !G.confirms[pl.id]).length,
         canPickRole: soloHuman(p),
       };
     }
 
     if (G.phase === 'night' && p.alive) {
-      const prompt = ROLES[p.role].nightPrompt;
+      const prompt = (p.role === 'vigilante' && p.usedShot) ? null : ROLES[p.role].nightPrompt;
       view.night = {
         acted: p.id in G.night.actions,
-        actionTarget: G.night.actions[p.id] ? nameOf(G.night.actions[p.id]) : null,
+        actionTarget: G.night.actions[p.id] && G.night.actions[p.id] !== 'skip' ? nameOf(G.night.actions[p.id]) : null,
+        heldFire: G.night.actions[p.id] === 'skip',
+        canSkip: p.role === 'vigilante' && !p.usedShot,
         prompt,
         targets: prompt ? nightTargetsFor(p).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })) : [],
         mates: p.role === 'mafia'
@@ -711,6 +808,20 @@ const Host = (() => {
       };
       view.chat = G.chat.slice(-50);
       view.canChat = p.alive;
+    }
+
+    if (G.phase === 'verdict') {
+      view.verdict = {
+        lastWords: G.lastWords,
+        canSay: !!(G.announce && G.announce.eliminatedId === p.id && !G.lastWords),
+      };
+    }
+
+    if (G.phase === 'ended') {
+      view.recap = {
+        timeline: G.log.filter(e => e.important).map(e => e.text),
+        yours: (p.actions || []).slice(),
+      };
     }
 
     return view;
@@ -753,7 +864,7 @@ const Host = (() => {
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
-            <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n, settings.maxMafia)) : `need ${MIN_PLAYERS - n} more`}</span></div>
+            <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n, deckOpts())) : `need ${MIN_PLAYERS - n} more`}</span></div>
           <div class="player-list">${G.players.map(p => `
             <div class="player-row">
               <span class="dot ${p.connected ? 'on' : 'off'}"></span>
@@ -778,6 +889,10 @@ const Host = (() => {
             Show who voted for who (unticked = secret ballot)</label>
           <label class="opt"><input type="checkbox" id="opt-no-self-heal" ${settings.noSelfHeal ? 'checked' : ''}>
             Doctor can't protect themselves</label>
+          <label class="opt"><input type="checkbox" id="opt-vigilante" ${settings.vigilante ? 'checked' : ''}>
+            🔫 Include the Vigilante (town, one bullet per game)</label>
+          <label class="opt"><input type="checkbox" id="opt-jester" ${settings.jester ? 'checked' : ''}>
+            🃏 Include the Jester (wins alone if voted out)</label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -853,6 +968,10 @@ const Host = (() => {
     if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
     const osh = el('opt-no-self-heal');
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
+    const ovg = el('opt-vigilante');
+    if (ovg) ovg.onchange = () => { settings.vigilante = ovg.checked; broadcast(); };
+    const oj = el('opt-jester');
+    if (oj) oj.onchange = () => { settings.jester = oj.checked; broadcast(); };
     const ont = el('opt-night-timer');
     if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
     const odt = el('opt-day-timer');
