@@ -129,6 +129,14 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
 .chat-row { display: flex; gap: 8px; }
 .chat-row input { flex: 1; padding: 10px 12px; font-size: 1rem; }
+/* Phase countdown */
+.phase-timer {
+  display: inline-block; margin-top: 10px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.phase-timer.urgent { color: var(--accent); border-color: var(--accent); animation: pulse 1s infinite; }
+
 /* Vote rows: voters' names on the left, the candidate floated right */
 .vote-line { gap: 10px; }
 .vote-line .vote-voters {

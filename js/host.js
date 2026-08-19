@@ -14,7 +14,16 @@ const Host = (() => {
   let localConn = null; // the host's own loopback connection
   let hostName = null;
   let G = null;        // game state
-  let settings = { safeFirstNight: false, maxMafia: 0, showVoters: true }; // survives new games
+  let settings = { safeFirstNight: false, maxMafia: 0, showVoters: true, nightTimer: 120, dayTimer: 300 }; // survives new games
+  let phaseTimer = null; // auto-advance timeout for the current phase
+
+  /* Arm (or clear, with seconds=0) the current phase's auto-advance timer. */
+  function setPhaseTimer(seconds, fn) {
+    clearTimeout(phaseTimer);
+    phaseTimer = null;
+    G.deadline = seconds > 0 ? Date.now() + seconds * 1000 : null;
+    if (seconds > 0) phaseTimer = setTimeout(fn, seconds * 1000);
+  }
 
   /* ---------------- state ---------------- */
 
@@ -288,6 +297,7 @@ const Host = (() => {
     addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, settings.maxMafia)}).`, true);
     G.phase = 'reveal';
     G.confirms = {};
+    setPhaseTimer(0);
     broadcast();
   }
 
@@ -320,6 +330,7 @@ const Host = (() => {
     G.night = { actions: {} };
     G.votes = null;
     G.chat = [];
+    setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
     broadcast();
   }
@@ -414,6 +425,7 @@ const Host = (() => {
 
     G.phase = 'day';
     G.votes = {};
+    setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
     broadcast();
   }
@@ -470,6 +482,7 @@ const Host = (() => {
 
     // Show the verdict to everyone for a few seconds before moving on.
     G.phase = 'verdict';
+    setPhaseTimer(0);
     broadcast();
     setTimeout(() => {
       if (!G || G.phase !== 'verdict') return;
@@ -487,6 +500,7 @@ const Host = (() => {
     if (winner) {
       G.phase = 'ended';
       G.winner = winner;
+      setPhaseTimer(0);
       addLog(winner === 'town'
         ? 'All mafia have been eliminated — the town wins! 🎉'
         : 'The mafia have taken over the town — the mafia win! 🔪', true);
@@ -499,6 +513,7 @@ const Host = (() => {
   function playAgain() {
     const keep = G.players.filter(p => p.connected);
     G = freshGame();
+    setPhaseTimer(0);
     G.players = keep.map(p => ({
       id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
       avatar: p.avatar, isBot: p.isBot,
@@ -541,7 +556,11 @@ const Host = (() => {
       winner: G.winner,
       announce: G.announce,
       roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, settings.maxMafia) : null,
-      settings: { safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters },
+      settings: {
+        safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
+        nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+      },
+      timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
       you: {
         id: p.id, name: p.name, alive: p.alive, avatar: p.avatar,
         role: G.phase === 'lobby' ? null : p.role,
@@ -658,6 +677,14 @@ const Host = (() => {
             </select></label>
           <label class="opt"><input type="checkbox" id="opt-show-voters" ${settings.showVoters ? 'checked' : ''}>
             Show who voted for who (unticked = secret ballot)</label>
+          <label class="opt">Night timer:
+            <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
+              `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select></label>
+          <label class="opt">Discussion timer:
+            <select id="opt-day-timer">${[[0, 'No limit'], [120, '2 min'], [180, '3 min'], [300, '5 min'], [600, '10 min']].map(([v, l]) =>
+              `<option value="${v}" ${settings.dayTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select></label>
         </div>`;
     }
 
@@ -723,6 +750,10 @@ const Host = (() => {
     if (om) om.onchange = () => { settings.maxMafia = parseInt(om.value, 10) || 0; broadcast(); };
     const ov = el('opt-show-voters');
     if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
+    const ont = el('opt-night-timer');
+    if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
+    const odt = el('opt-day-timer');
+    if (odt) odt.onchange = () => { settings.dayTimer = parseInt(odt.value, 10) || 0; broadcast(); };
   }
 
   return { create, destroy, PEER_PREFIX };

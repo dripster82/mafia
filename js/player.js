@@ -19,6 +19,7 @@ const Player = (() => {
   let toastMsg = null;             // transient message from the host (e.g. name taken)
   let toastTimer = null;
   let chatDraft = '';              // in-progress chat message, survives re-renders
+  let phaseTickInterval = null;    // 1s countdown updater for the phase timer
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -430,7 +431,9 @@ const Player = (() => {
         <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}
         ${view.settings ? `<p class="muted small-text">First night: ${view.settings.safeFirstNight ? 'no deaths' : 'normal'} ·
-          Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}</p>` : ''}</div>`;
+          Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}<br>
+          ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
+          Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
       html += profileCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
@@ -497,7 +500,8 @@ const Player = (() => {
     /* ----- night ----- */
     else if (view.phase === 'night') {
       html += announceHTML();
-      html += `<div class="banner night"><span class="big-emoji">🌙</span><h2>Night ${view.dayNum}</h2></div>`;
+      html += `<div class="banner night"><span class="big-emoji">🌙</span><h2>Night ${view.dayNum}</h2>
+        ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
       html += roleCardHTML(view.you.role, true);
 
       const n = view.night;
@@ -520,7 +524,8 @@ const Player = (() => {
 
     /* ----- day / voting ----- */
     else if (view.phase === 'day') {
-      html += `<div class="banner day"><span class="big-emoji">☀️</span><h2>Day ${view.dayNum}</h2></div>`;
+      html += `<div class="banner day"><span class="big-emoji">☀️</span><h2>Day ${view.dayNum}</h2>
+        ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
       html += announceHTML();
       html += roleCardHTML(view.you.role, true);
       html += investigationsHTML();
@@ -588,6 +593,24 @@ const Player = (() => {
     if (cs) cs.onclick = sendChat;
     const cl = el('chat-log');
     if (cl) cl.scrollTop = cl.scrollHeight;
+
+    // Phase countdown: the host's clock is authoritative; adjust for skew and
+    // tick locally so we don't need per-second broadcasts.
+    clearInterval(phaseTickInterval);
+    if (view.timer && el('phase-timer')) {
+      const localDeadline = view.timer.deadline + (Date.now() - view.timer.hostNow);
+      const tick = () => {
+        const t = el('phase-timer');
+        if (!t) { clearInterval(phaseTickInterval); return; }
+        const rem = Math.max(0, Math.round((localDeadline - Date.now()) / 1000));
+        t.textContent = rem > 0
+          ? `⏱ ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}`
+          : '⏱ Time’s up!';
+        t.classList.toggle('urgent', rem > 0 && rem <= 30);
+      };
+      tick();
+      phaseTickInterval = setInterval(tick, 1000);
+    }
 
     const saveProfileName = () => {
       const pn = el('profile-name');
