@@ -102,6 +102,15 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .room-code-box .url { color: var(--muted); font-size: 0.85rem; word-break: break-all; }
 
+/* Solo-mode suspicion debug */
+.susp-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.susp-name { flex: 0 0 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.susp-track { flex: 1; height: 8px; background: var(--bg2); border-radius: 999px; overflow: hidden; }
+.susp-fill { height: 100%; border-radius: 999px; transition: width 0.4s; }
+.susp-fill.pos { background: var(--accent); }
+.susp-fill.neg { background: var(--good); }
+.susp-score { flex: 0 0 2.4em; text-align: right; font-variant-numeric: tabular-nums; }
+
 /* Join diagnostics */
 .debug-log {
   text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

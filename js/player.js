@@ -722,6 +722,20 @@ const Player = (() => {
       html += playersListHTML(false);
     }
 
+    // Solo-mode debug: how suspicious the bots find everyone right now.
+    if (view.suspicionDebug) {
+      html += `<div class="card"><h3>🧪 Bot suspicion — solo debug</h3>
+        <p class="muted small-text" style="margin:4px 0 8px">What the table currently thinks (accusations raise it, defenses lower it; −6 to +10).</p>
+        ${view.suspicionDebug.map(s => {
+          const pct = Math.round(Math.abs(s.score) / (s.score >= 0 ? 10 : 6) * 100);
+          return `<div class="susp-row">
+            <span class="small-text susp-name">${s.avatar || ''} ${esc(s.name)}${s.you ? ' (you)' : ''}</span>
+            <div class="susp-track"><div class="susp-fill ${s.score >= 0 ? 'pos' : 'neg'}" style="width:${pct}%"></div></div>
+            <span class="small-text muted susp-score">${s.score > 0 ? '+' : ''}${s.score}</span>
+          </div>`;
+        }).join('')}</div>`;
+    }
+
     // Keep text inputs alive across re-renders (broadcasts arrive whenever
     // anyone joins, changes profile, chats, or votes).
     const prevInput = document.getElementById('profile-name');

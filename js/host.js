@@ -1578,6 +1578,14 @@ const Host = (() => {
       view.canChat = p.alive;
     }
 
+    // Solo test vs bots: expose the bots' suspicion weights for tuning.
+    if (soloHuman(p) && ['night', 'day', 'verdict'].includes(G.phase)) {
+      view.suspicionDebug = G.players
+        .filter(t => !t.spectator && t.alive)
+        .map(t => ({ name: t.name, avatar: t.avatar, you: t.id === p.id, score: G.suspicion[t.id] || 0 }))
+        .sort((a, b) => b.score - a.score);
+    }
+
     if (G.phase === 'verdict') {
       view.verdict = {
         lastWords: G.lastWords,
