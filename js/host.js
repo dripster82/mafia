@@ -250,14 +250,24 @@ const Host = (() => {
     maybeReconsiderVotes();
   }
 
-  /* What a bot says when directly addressed. */
+  /* What a bot says when directly addressed — consistent with how it votes. */
   function botReplyTo(bot, lower) {
     if (/\?|what do you think|who (do|should|is)|any ideas|thoughts/.test(lower)) {
       if (bot.role === 'detective' && bot.intel) {
         const m = bot.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
-        if (m.length) return rndOf([`Between us? Keep a very close eye on ${m[0].name}.`, `I have solid reasons to distrust ${m[0].name}.`]);
+        if (m.length) {
+          bot.chatIntent = { day: G.dayNum, target: m[0].id };
+          return rndOf([`Between us? Keep a very close eye on ${m[0].name}.`, `I have solid reasons to distrust ${m[0].name}.`]);
+        }
       }
-      const pick = botSuspicionPick(bot, 2);
+      // Answer with the target the bot actually intends to vote for.
+      const ci = bot.chatIntent && bot.chatIntent.day === G.dayNum ? bot.chatIntent.target : null;
+      let pick = ci && ci !== 'nobody' ? getPlayer(ci) : null;
+      if (pick && !pick.alive) pick = null;
+      if (!pick && ci !== 'nobody') {
+        pick = botSuspicionPick(bot, 2);
+        if (pick) bot.chatIntent = { day: G.dayNum, target: pick.id };
+      }
       if (pick) {
         return rndOf([
           `Honestly? My money's on ${pick.name}.`,
@@ -293,7 +303,17 @@ const Host = (() => {
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !b.alive || !(b.id in G.votes)) return;
         const pick = botSuspicionPick(b, 4);
-        if (pick && G.votes[b.id] !== pick.id) handleVote(b, pick.id);
+        if (pick && G.votes[b.id] !== pick.id) {
+          // Say so before switching, so chat and votes stay in step.
+          b.chatIntent = { day: G.dayNum, target: pick.id };
+          handleVote(b, pick.id);
+          if (Math.random() < 0.6) {
+            handleChat(b, rndOf([
+              `Changed my mind — it's ${pick.name}.`,
+              `Actually… I'm switching my vote to ${pick.name}.`,
+            ]));
+          }
+        }
       }, 1500 + Math.random() * 3000);
     });
   }
@@ -368,7 +388,7 @@ const Host = (() => {
       p.drifterUses = 2; p.pledged = false; p.poisonedNight = null;
       p.cleaned = false; p.forged = false; p.recruited = false;
       p.execTargetId = null; p.achievedWin = false; p.lostWin = false;
-      p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0;
+      p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0; p.chatIntent = null;
       p.actions = []; p.intel = [];
     });
     // Each executioner gets a personal grudge against a random townsperson.
@@ -1096,61 +1116,39 @@ const Host = (() => {
     }, delay);
   }
 
-  const BOT_LINES = [
-    'It wasn’t me, I promise!',
-    'Hmm, {name} is being very quiet…',
-    'I don’t trust {name} one bit.',
-    'My money’s on {name}.',
-    'Let’s not vote anyone out yet, it’s too early.',
-    'Something about {name} feels off today.',
-    'I was asleep all night, honest.',
-    'Did anyone else notice {name} acting strange?',
-    'We should think carefully before voting.',
-    'I say we vote out {name} and be done with it.',
-    '{name}, care to explain yourself?',
-    'The mafia is definitely among us…',
-  ];
+  /* Who this bot intends to vote for today — used for both its table talk
+   * and its actual vote, so what it says always matches what it does. */
+  function botVoteTarget(p) {
+    if (p.role === 'detective' && p.intel) {
+      const m = p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
+      if (m.length) return m[0].id;
+    }
+    if (p.role === 'executioner' && p.execTargetId && !p.lostWin && !p.achievedWin) {
+      const t = getPlayer(p.execTargetId);
+      if (t && t.alive) return t.id;
+    }
+    const pick = botSuspicionPick(p, 2);
+    if (pick && Math.random() < 0.75) return pick.id;
+    if (teamOf(p) === 'mafia') {
+      const town = alivePlayers().filter(t => teamOf(t) !== 'mafia');
+      return (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
+    }
+    const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
+    opts.push('nobody', 'nobody', 'nobody');
+    return opts.length ? rndOf(opts) : 'nobody';
+  }
 
   function botLine(p) {
-    const others = alivePlayers().filter(t => t.id !== p.id);
     const r = Math.random();
 
-    if (p.role === 'detective' && p.intel && p.intel.length) {
-      const mafiaKnown = p.intel.filter(i => { const t = getPlayer(i.targetId); return i.isMafia && t && t.alive; });
-      const cleared = p.intel.filter(i => { const t = getPlayer(i.targetId); return !i.isMafia && t && t.alive; });
-      if (mafiaKnown.length && r < 0.55) {
-        const t = getPlayer(rndOf(mafiaKnown).targetId);
-        return rndOf([
-          `I'm the detective — ${t.name} is mafia. Vote them out!`,
-          `Listen carefully: it's ${t.name}. I'd bet my badge on it.`,
-          `I've been watching ${t.name} all night… it's them.`,
-        ]);
-      }
-      if (cleared.length && r < 0.8) {
-        const t = getPlayer(rndOf(cleared).targetId);
-        return rndOf([
-          `For what it's worth, I'm certain ${t.name} is innocent.`,
-          `It's definitely not ${t.name} — let's look elsewhere.`,
-          `Leave ${t.name} alone, they're clean. Trust me.`,
-        ]);
-      }
+    if (p.role === 'doctor' && G.announce && G.announce.kind === 'dawn' &&
+        (G.announce.saved || G.announce.savedName) && r < 0.35) {
+      return rndOf([
+        'Lucky someone was watching over the town last night…',
+        'Good thing nobody died, eh? 😉',
+      ]);
     }
-
-    if (teamOf(p) === 'mafia') {
-      const town = others.filter(t => teamOf(t) !== 'mafia');
-      if (town.length && r < 0.7) {
-        const t = rndOf(town);
-        return rndOf([
-          `${t.name} is acting really suspicious, if you ask me.`,
-          `My money's on ${t.name}.`,
-          `Did anyone else see ${t.name} hesitate? Just saying…`,
-          `It's obviously ${t.name}. Who's with me?`,
-        ]);
-      }
-      return rndOf(['It wasn’t me, I promise!', 'I was asleep all night, honest.', 'Let’s not rush this vote.']);
-    }
-
-    if (p.role === 'jester' && r < 0.45) {
+    if (p.role === 'jester' && r < 0.4) {
       return rndOf([
         'Honestly? It could easily be me. Who knows! 😏',
         'I’m not saying it’s me… but I’m not NOT saying it.',
@@ -1159,27 +1157,56 @@ const Host = (() => {
       ]);
     }
 
-    if (p.role === 'executioner' && p.execTargetId && !p.lostWin && r < 0.6) {
-      const t = getPlayer(p.execTargetId);
-      if (t && t.alive) {
+    // Decide the vote first; talk about THAT person (or stay non-committal).
+    const targetId = botVoteTarget(p);
+    p.chatIntent = { day: G.dayNum, target: targetId };
+    const t = targetId && targetId !== 'nobody' ? getPlayer(targetId) : null;
+
+    if (t) {
+      if (p.role === 'detective' && p.intel && p.intel.some(i => i.targetId === t.id && i.isMafia)) {
+        return rndOf([
+          `I'm the detective — ${t.name} is mafia. Vote them out!`,
+          `Listen carefully: it's ${t.name}. I'd bet my badge on it.`,
+          `I've been watching ${t.name} all night… it's them.`,
+        ]);
+      }
+      if (p.role === 'executioner' && t.id === p.execTargetId) {
         return rndOf([
           `I've got a bad feeling about ${t.name}.`,
           `${t.name} has been lying since day one. Vote them out.`,
           `If we vote anyone today, it should be ${t.name}.`,
         ]);
       }
-    }
-
-    if (p.role === 'doctor' && G.announce && G.announce.kind === 'dawn' &&
-        (G.announce.saved || G.announce.savedName) && r < 0.4) {
       return rndOf([
-        'Lucky someone was watching over the town last night…',
-        'Good thing nobody died, eh? 😉',
+        `${t.name} is acting really suspicious, if you ask me.`,
+        `My money's on ${t.name}.`,
+        `I don't trust ${t.name} one bit.`,
+        `Something about ${t.name} feels off today.`,
+        `I say we vote out ${t.name} and be done with it.`,
+        `${t.name}, care to explain yourself?`,
+        `Did anyone else notice ${t.name} acting strange?`,
       ]);
     }
 
-    const name = others.length ? rndOf(others).name : 'someone';
-    return rndOf(BOT_LINES).replace('{name}', name);
+    // Intending to spare everyone — sound like it.
+    if (p.role === 'detective' && p.intel) {
+      const cleared = p.intel.map(i => !i.isMafia ? getPlayer(i.targetId) : null).filter(x => x && x.alive);
+      if (cleared.length && r < 0.5) {
+        const c = rndOf(cleared);
+        return rndOf([
+          `For what it's worth, I'm certain ${c.name} is innocent.`,
+          `It's definitely not ${c.name} — let's look elsewhere.`,
+        ]);
+      }
+    }
+    return rndOf([
+      'Let’s not vote anyone out yet, it’s too early.',
+      'We should think carefully before voting.',
+      'I was asleep all night, honest.',
+      'The mafia is definitely among us… but I’m not sure who.',
+      'I’m holding my vote until someone slips up.',
+      'Quiet day. Too quiet.',
+    ]);
   }
 
   /* A bot's night decision, driven by what it knows: table-talk suspicion,
@@ -1313,28 +1340,18 @@ const Host = (() => {
         return;
       }
       if (!(p.id in G.votes)) {
+        // Vote what was said at the table; only decide fresh if the bot never
+        // spoke today or its declared target has since died.
         let target = null;
-        if (p.role === 'detective' && p.intel) {
-          const m = p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
-          if (m.length) target = m[0].id;
-        } else if (p.role === 'executioner' && p.execTargetId && !p.lostWin && !p.achievedWin) {
-          const t = getPlayer(p.execTargetId);
-          if (t && t.alive) target = t.id;
+        const ci = p.chatIntent;
+        if (ci && ci.day === G.dayNum) {
+          if (ci.target === 'nobody') target = 'nobody';
+          else {
+            const t = getPlayer(ci.target);
+            if (t && t.alive && t.id !== p.id) target = t.id;
+          }
         }
-        if (!target) {
-          // Listen to the table: a standout suspect draws the vote.
-          const pick = botSuspicionPick(p, 2);
-          if (pick && Math.random() < 0.75) target = pick.id;
-        }
-        if (!target && teamOf(p) === 'mafia') {
-          const town = alivePlayers().filter(t => teamOf(t) !== 'mafia');
-          target = (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
-        }
-        if (!target) {
-          const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
-          opts.push('nobody', 'nobody');
-          target = rndOf(opts);
-        }
+        if (!target) target = botVoteTarget(p) || 'nobody';
         handleVote(p, target);
       }
     }
