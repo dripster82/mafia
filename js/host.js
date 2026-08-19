@@ -54,7 +54,7 @@ const Host = (() => {
       winner: null,
       lastWords: null,     // final message from a vote-eliminated player
       chat: [],            // lobby + day table talk, cleared each night
-      suspicion: {},       // playerId -> score, driven by table talk; bots use it
+      // (suspicion lives per-bot on each player object: p.susp, p.heat)
       log: [],             // public information only — the host can read this
       deadline: null,
     };
@@ -183,10 +183,23 @@ const Host = (() => {
   /* Everyone at the table — bots included — listens to what gets said.
    * Accusations raise a player's suspicion score, defenses lower it, and a
    * detective claim carries extra weight. Bots use the scores to vote. */
-  function bumpSuspicion(id, amt) {
+  /* Each bot keeps its OWN opinion of every player, scaled by a personal
+   * credulity factor — some bots are gullible, some skeptical. */
+  function bumpFor(listener, targetId, amt) {
+    if (!listener.isBot || listener.id === targetId) return;
+    const v = Math.round(amt * (listener.credulity || 1)) || (amt > 0 ? 1 : -1);
+    listener.susp = listener.susp || {};
     // Clamp so no one becomes an unshakeable pariah (or untouchable saint).
-    G.suspicion[id] = Math.max(-6, Math.min(10, (G.suspicion[id] || 0) + amt));
+    listener.susp[targetId] = Math.max(-6, Math.min(10, (listener.susp[targetId] || 0) + v));
   }
+
+  /* How accused a player themself is — drives self-defense, the mayor's
+   * pledge, and the drifter's lying low. */
+  function heatUp(target, amt) {
+    target.heat = Math.max(0, Math.min(12, (target.heat || 0) + amt));
+  }
+
+  function suspOf(b, id) { return (b.susp || {})[id] || 0; }
 
   function reactToChat(speaker, text) {
     const lower = text.toLowerCase();
@@ -208,9 +221,14 @@ const Host = (() => {
       if (!lower.includes(t.name.toLowerCase())) return;
       mentioned.push(t);
       // Bot chatter counts for less than a human's word, so bots echoing each
-      // other can't snowball one target into a permanent pile-on.
-      if (defend) bumpSuspicion(t.id, detClaim ? -4 : speaker.isBot ? -1 : -2);
-      else if (accuse) bumpSuspicion(t.id, detClaim ? 5 : speaker.isBot ? 1 : 2);
+      // other can't snowball one target — and every listening bot forms its
+      // OWN opinion of what it just heard.
+      const amt = defend ? (detClaim ? -4 : speaker.isBot ? -1 : -2)
+                : accuse ? (detClaim ? 5 : speaker.isBot ? 1 : 2) : 0;
+      if (amt) {
+        alivePlayers().filter(b => b.isBot && b.id !== speaker.id).forEach(b => bumpFor(b, t.id, amt));
+        if (amt > 0) heatUp(t, amt);
+      }
     });
     // Bots answer when spoken to (questions, greetings, or just their name).
     mentioned.filter(t => t.isBot && t.alive).forEach(bot => {
@@ -270,7 +288,7 @@ const Host = (() => {
     // If the liar happened to accuse someone the real detective KNOWS is
     // mafia, staying quiet and letting it ride is the smarter play.
     if (accused && realDet.intel && realDet.intel.some(i => i.targetId === accused.id && i.isMafia)) {
-      bumpSuspicion(claimant.id, 1);
+      bumpFor(realDet, claimant.id, 1);
       return;
     }
     if (Math.random() < 0.6) {
@@ -291,7 +309,7 @@ const Host = (() => {
       }, 2500 + Math.random() * 3000);
     } else {
       // Stays hidden, but the liar becomes their prime suspect.
-      bumpSuspicion(claimant.id, 3);
+      bumpFor(realDet, claimant.id, 3);
     }
   }
 
@@ -330,7 +348,7 @@ const Host = (() => {
     const mentionedOthers = alivePlayers().filter(t => t.id !== bot.id && lower.includes(t.name.toLowerCase()));
     if (mentionedOthers.length) {
       const m = rndOf(mentionedOthers);
-      const sm = G.suspicion[m.id] || 0;
+      const sm = suspOf(bot, m.id);
       if (bot.role === 'detective' && bot.intel) {
         const rec = bot.intel.find(i => i.targetId === m.id);
         if (rec) {
@@ -380,16 +398,16 @@ const Host = (() => {
     const cands = alivePlayers().filter(t =>
       t.id !== b.id && !(teamOf(b) === 'mafia' && teamOf(t) === 'mafia'));
     if (!cands.length) return null;
-    const hot = cands.filter(t => (G.suspicion[t.id] || 0) >= (minScore || 2));
+    const hot = cands.filter(t => suspOf(b, t.id) >= (minScore || 2));
     if (!hot.length) return null;
     // 15% of the time, look past the noise at an unwatched player instead.
-    const cold = cands.filter(t => (G.suspicion[t.id] || 0) <= 0);
+    const cold = cands.filter(t => suspOf(b, t.id) <= 0);
     if (cold.length && Math.random() < 0.15) return rndOf(cold);
     // Otherwise pick weighted by score, so runners-up still draw attention.
-    const total = hot.reduce((s, t) => s + (G.suspicion[t.id] || 0), 0);
+    const total = hot.reduce((s, t) => s + suspOf(b, t.id), 0);
     let roll = Math.random() * total;
     for (const t of hot) {
-      roll -= (G.suspicion[t.id] || 0);
+      roll -= suspOf(b, t.id);
       if (roll <= 0) return t;
     }
     return hot[hot.length - 1];
@@ -489,6 +507,7 @@ const Host = (() => {
       p.cleaned = false; p.forged = false; p.recruited = false;
       p.execTargetId = null; p.achievedWin = false; p.lostWin = false;
       p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0; p.chatIntent = null;
+      p.susp = {}; p.heat = 0; p.credulity = 0.6 + Math.random() * 0.8; // gullible ↔ skeptical
       p.actions = []; p.intel = [];
     });
     // Each executioner gets a personal grudge against a random townsperson.
@@ -538,7 +557,10 @@ const Host = (() => {
     G.votes = null;
     G.chat = [];
     // Yesterday's accusations fade, but aren't forgotten.
-    Object.keys(G.suspicion).forEach(k => { G.suspicion[k] = Math.round(G.suspicion[k] / 2); });
+    G.players.forEach(x => {
+      if (x.susp) Object.keys(x.susp).forEach(k => { x.susp[k] = Math.round(x.susp[k] / 2); });
+      x.heat = Math.floor((x.heat || 0) / 2);
+    });
     setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
     broadcast();
@@ -838,7 +860,12 @@ const Host = (() => {
         const target = getPlayer(t);
         if (target) {
           const reads = target.role === 'don' ? false : (framed.has(t) || teamOf(target) === 'mafia');
-          if (d.isBot) (d.intel = d.intel || []).push({ targetId: t, isMafia: reads });
+          if (d.isBot) {
+            (d.intel = d.intel || []).push({ targetId: t, isMafia: reads });
+            // Hard evidence overrides gossip in the detective's own book.
+            d.susp = d.susp || {};
+            d.susp[t] = reads ? 10 : -6;
+          }
           report(d, `🔍 ${target.name} is ${reads ? 'MAFIA 🔪' : 'not mafia ✅'}`);
           recapResult(d, reads ? 'mafia' : 'not mafia');
         }
@@ -1348,7 +1375,7 @@ const Host = (() => {
     const PSEUDO = ['pledge', 'hide', 'clean'];
     const T = ui.targets.map(t => t.id).filter(id => !PSEUDO.includes(id));
     const inT = id => id && T.includes(id);
-    const s = id => G.suspicion[id] || 0;
+    const s = id => suspOf(p, id);
     const suspLeader = min => {
       let best = null;
       T.forEach(id => { if (s(id) >= min && (!best || s(id) > s(best))) best = id; });
@@ -1413,7 +1440,7 @@ const Host = (() => {
       return Math.random() < 0.15 && T.length ? rndOf(T) : 'skip';
     }
     if (role === 'mayor') {
-      if (s(p.id) >= 3 && Math.random() < 0.7) return 'pledge'; // clear their own name
+      if ((p.heat || 0) >= 3 && Math.random() < 0.7) return 'pledge'; // clear their own name
       if (alivePlayers().length <= 5 && Math.random() < 0.35) return 'pledge';
       return 'skip';
     }
@@ -1446,7 +1473,7 @@ const Host = (() => {
       return 'skip';
     }
     if (role === 'drifter') {
-      if (s(p.id) >= 3 && Math.random() < 0.7) return 'hide';   // heat's on — disappear
+      if ((p.heat || 0) >= 3 && Math.random() < 0.7) return 'hide'; // heat's on — disappear
       return Math.random() < 0.12 ? 'hide' : 'skip';
     }
     return ui.canSkip ? 'skip' : (T.length ? rndOf(T) : null);
@@ -1630,12 +1657,19 @@ const Host = (() => {
       view.canChat = p.alive;
     }
 
-    // Solo test vs bots: expose the bots' suspicion weights for tuning.
+    // Solo test vs bots: expose each bot's personal suspicion table.
     if (soloHuman(p) && ['night', 'day', 'verdict'].includes(G.phase)) {
       view.suspicionDebug = G.players
-        .filter(t => !t.spectator && t.alive)
-        .map(t => ({ name: t.name, avatar: t.avatar, you: t.id === p.id, score: G.suspicion[t.id] || 0 }))
-        .sort((a, b) => b.score - a.score);
+        .filter(b => b.isBot && b.alive)
+        .map(b => ({
+          name: b.name, avatar: b.avatar, heat: b.heat || 0,
+          credulity: Math.round((b.credulity || 1) * 100) / 100,
+          sees: alivePlayers()
+            .filter(t => t.id !== b.id)
+            .map(t => ({ name: t.name, avatar: t.avatar, score: suspOf(b, t.id) }))
+            .filter(x => x.score !== 0)
+            .sort((a, c) => c.score - a.score),
+        }));
     }
 
     if (G.phase === 'verdict') {

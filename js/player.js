@@ -722,18 +722,18 @@ const Player = (() => {
       html += playersListHTML(false);
     }
 
-    // Solo-mode debug: how suspicious the bots find everyone right now.
+    // Solo-mode debug: each bot's personal suspicion table.
     if (view.suspicionDebug) {
       html += `<div class="card"><h3>🧪 Bot suspicion — solo debug</h3>
-        <p class="muted small-text" style="margin:4px 0 8px">What the table currently thinks (accusations raise it, defenses lower it; −6 to +10).</p>
-        ${view.suspicionDebug.map(s => {
-          const pct = Math.round(Math.abs(s.score) / (s.score >= 0 ? 10 : 6) * 100);
-          return `<div class="susp-row">
-            <span class="small-text susp-name">${s.avatar || ''} ${esc(s.name)}${s.you ? ' (you)' : ''}</span>
-            <div class="susp-track"><div class="susp-fill ${s.score >= 0 ? 'pos' : 'neg'}" style="width:${pct}%"></div></div>
-            <span class="small-text muted susp-score">${s.score > 0 ? '+' : ''}${s.score}</span>
-          </div>`;
-        }).join('')}</div>`;
+        <p class="muted small-text" style="margin:4px 0 8px">Each bot's own reads (−6 trusted … +10 suspect), its credulity, and how accused it feels (heat).</p>
+        ${view.suspicionDebug.map(b => `
+          <p class="small-text" style="margin:8px 0 2px"><strong>${b.avatar || ''} ${esc(b.name)}</strong>
+            <span class="muted">· credulity ×${b.credulity}${b.heat ? ` · heat ${b.heat}` : ''}</span></p>
+          <p class="small-text muted" style="margin:0">${
+            b.sees.length
+              ? b.sees.map(x => `${x.avatar || ''} ${esc(x.name)} <strong class="${x.score > 0 ? 'susp-pos' : 'susp-neg'}">${x.score > 0 ? '+' : ''}${x.score}</strong>`).join(' · ')
+              : 'no reads yet'
+          }</p>`).join('')}</div>`;
     }
 
     // Keep text inputs alive across re-renders (broadcasts arrive whenever
