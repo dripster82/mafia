@@ -99,7 +99,7 @@ const Host = (() => {
    * Bots join through loopback connections like the host's own seat, get
    * dealt roles, and act on a short random delay. */
 
-  const BOT_NAMES = ['🤖 Rita', '🤖 Max', '🤖 Ivy', '🤖 Gus', '🤖 Sal', '🤖 Fay', '🤖 Ned', '🤖 Lou', '🤖 Peg', '🤖 Vic'];
+  const BOT_NAMES = ['Rita', 'Max', 'Ivy', 'Gus', 'Sal', 'Fay', 'Ned', 'Lou', 'Peg', 'Vic'];
 
   function addBot() {
     if (!G || G.phase !== 'lobby' || G.players.length >= 15) return;
@@ -115,6 +115,8 @@ const Host = (() => {
       },
     };
     handleJoin(conn, { t: 'join', name });
+    const bot = getPlayer(conn._playerId);
+    if (bot) { bot.avatar = '🤖'; broadcast(); }
   }
 
   function botAct(conn) {
@@ -165,6 +167,26 @@ const Host = (() => {
     if (!p) return;
     if (msg.t === 'night') return handleNightAction(p, msg.target);
     if (msg.t === 'vote') return handleVote(p, msg.target);
+    if (msg.t === 'profile') return handleProfile(p, msg);
+  }
+
+  /* Lobby-only: rename and avatar changes. */
+  function handleProfile(p, msg) {
+    if (G.phase !== 'lobby') return;
+    if (msg.avatar && AVATARS.includes(msg.avatar)) {
+      p.avatar = msg.avatar;
+    }
+    if (msg.name !== undefined) {
+      const name = String(msg.name || '').trim().slice(0, 16);
+      if (!name) {
+        send(p.id, { t: 'toast', msg: 'Names can’t be empty.' });
+      } else if (G.players.some(pl => pl.id !== p.id && pl.name.toLowerCase() === name.toLowerCase())) {
+        send(p.id, { t: 'toast', msg: 'That name is taken — pick another.' });
+      } else {
+        p.name = name;
+      }
+    }
+    broadcast();
   }
 
   function handleJoin(conn, msg) {
@@ -194,6 +216,7 @@ const Host = (() => {
       p = {
         id: 'p' + Math.random().toString(36).slice(2, 10),
         name, role: null, alive: true, connected: true, causeOfDeath: null,
+        avatar: AVATARS[G.players.length % AVATARS.length],
       };
       G.players.push(p);
     }
@@ -385,6 +408,7 @@ const Host = (() => {
     G = freshGame();
     G.players = keep.map(p => ({
       id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
+      avatar: p.avatar,
     }));
     addLog('New game — waiting for the host to start.');
     broadcast();
@@ -425,11 +449,11 @@ const Host = (() => {
       announce: G.announce,
       roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length) : null,
       you: {
-        id: p.id, name: p.name, alive: p.alive,
+        id: p.id, name: p.name, alive: p.alive, avatar: p.avatar,
         role: G.phase === 'lobby' ? null : p.role,
       },
       players: G.players.map(t => ({
-        id: t.id, name: t.name, alive: t.alive, connected: t.connected,
+        id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
         role: roleVisibleTo(p, t) && G.phase !== 'lobby' ? t.role : null,
         causeOfDeath: t.alive ? null : t.causeOfDeath,
       })),
@@ -441,7 +465,7 @@ const Host = (() => {
         acted: p.id in G.night.actions,
         actionTarget: G.night.actions[p.id] ? nameOf(G.night.actions[p.id]) : null,
         prompt,
-        targets: prompt ? nightTargetsFor(p).map(t => ({ id: t.id, name: t.name })) : [],
+        targets: prompt ? nightTargetsFor(p).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })) : [],
         mates: p.role === 'mafia'
           ? aliveMafia().filter(m => m.id !== p.id).map(m => m.name)
           : null,
@@ -457,7 +481,7 @@ const Host = (() => {
         counts,
         voted: Object.keys(G.votes).length,
         needed: alivePlayers().length,
-        targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name })),
+        targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })),
       };
     }
 
@@ -505,7 +529,7 @@ const Host = (() => {
           <div class="player-list">${G.players.map(p => `
             <div class="player-row">
               <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-              <span class="name">${esc(p.name)}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
+              <span class="name">${p.avatar || ''} ${esc(p.name)}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
               ${localConn && p.id === localConn._playerId ? '' : `<button class="btn small ghost" data-kick="${p.id}">✕</button>`}
             </div>`).join('')}</div>
           <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>

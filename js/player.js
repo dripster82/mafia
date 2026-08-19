@@ -14,6 +14,9 @@ const Player = (() => {
   let local = false;               // true when this client is the host's own seat
   let mount = 'player-content';    // container the player view renders into
   let pillId = 'player-room-pill';
+  let nameDraft = null;            // in-progress lobby rename, survives re-renders
+  let toastMsg = null;             // transient message from the host (e.g. name taken)
+  let toastTimer = null;
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -121,6 +124,12 @@ const Player = (() => {
         roleRevealed = false;
       }
       view = msg.view;
+      if (nameDraft !== null && view.you.name === nameDraft.trim()) nameDraft = null;
+      render();
+    } else if (msg.t === 'toast') {
+      toastMsg = msg.msg;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastMsg = null; render(); }, 4000);
       render();
     } else if (msg.t === 'investigation') {
       investigations.push(msg);
@@ -166,10 +175,25 @@ const Player = (() => {
         const dead = !p.alive ? `<span class="status">${p.causeOfDeath === 'vote' ? 'voted out' : 'killed'}</span>` : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-          <span class="name">${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
+          <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
           ${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
+  }
+
+  /* Lobby-only: rename yourself and pick an avatar. */
+  function profileCardHTML() {
+    const av = view.you.avatar;
+    return `<div class="card"><h3>Your profile</h3>
+      <div class="profile-row">
+        <input id="profile-name" type="text" maxlength="16" autocomplete="off"
+          value="${esc(nameDraft !== null ? nameDraft : view.you.name)}">
+        <button id="profile-save" class="btn">Save</button>
+      </div>
+      ${toastMsg ? `<p class="error small-text" style="margin-top:6px">${esc(toastMsg)}</p>` : ''}
+      <div class="avatar-grid">${AVATARS.map(a =>
+        `<button class="avatar-btn ${a === av ? 'selected' : ''}" data-avatar="${a}">${a}</button>`).join('')}
+      </div></div>`;
   }
 
   function announceHTML() {
@@ -217,6 +241,7 @@ const Player = (() => {
         <h2>You're in, ${esc(view.you.name)}!</h2>
         <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}</div>`;
+      html += profileCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
           <div class="muted small-text">Invite others — scan to join room <strong>${esc(view.roomCode)}</strong></div>
@@ -255,7 +280,7 @@ const Player = (() => {
           <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p></div>`;
       } else {
         html += `<div class="card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
-          n.targets.map(t => `<button class="btn" data-night="${t.id}">${esc(t.name)}</button>`).join('')
+          n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
         }</div></div>`;
       }
     }
@@ -274,7 +299,7 @@ const Player = (() => {
         <p class="muted small-text" style="margin-bottom:10px">Discuss out loud, then cast your vote. You can change it until everyone has voted.</p>
         <div class="target-grid">${
           v.targets.map(t => `<button class="btn ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">
-            <span>${esc(t.name)}</span>${v.counts[t.id] ? `<span class="vote-count">${v.counts[t.id]} 🗳</span>` : ''}</button>`).join('')
+            <span>${t.avatar || ''} ${esc(t.name)}</span>${v.counts[t.id] ? `<span class="vote-count">${v.counts[t.id]} 🗳</span>` : ''}</button>`).join('')
         }<button class="btn ${v.yourVote === 'nobody' ? 'selected' : ''}" data-vote="nobody">
           <span>🕊 No one</span>${v.counts.nobody ? `<span class="vote-count">${v.counts.nobody} 🗳</span>` : ''}</button>
         </div></div>`;
@@ -292,7 +317,32 @@ const Player = (() => {
       html += playersListHTML(false);
     }
 
+    // Keep the profile name input alive across re-renders (broadcasts arrive
+    // whenever anyone joins or changes profile).
+    const prevInput = document.getElementById('profile-name');
+    const wasFocused = prevInput && document.activeElement === prevInput;
+    const selStart = wasFocused ? prevInput.selectionStart : 0;
+
     c.innerHTML = html;
+
+    const saveProfileName = () => {
+      const pn = el('profile-name');
+      if (pn) sendAction({ t: 'profile', name: pn.value });
+    };
+    const pn = el('profile-name');
+    if (pn) {
+      pn.oninput = () => { nameDraft = pn.value; };
+      pn.onkeydown = e => { if (e.key === 'Enter') saveProfileName(); };
+      if (wasFocused) {
+        pn.focus();
+        try { pn.setSelectionRange(selStart, selStart); } catch (e) {}
+      }
+    }
+    const ps = el('profile-save');
+    if (ps) ps.onclick = saveProfileName;
+    c.querySelectorAll('[data-avatar]').forEach(b => {
+      b.onclick = () => sendAction({ t: 'profile', avatar: b.dataset.avatar });
+    });
 
     const roleCard = el('role-card');
     if (roleCard && view.phase !== 'ended') {

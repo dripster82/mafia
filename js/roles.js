@@ -37,6 +37,11 @@ const ROLES = {
 
 const MIN_PLAYERS = 4;
 
+/* Avatars players can pick in the lobby. */
+const AVATARS = ['🦊', '🐻', '🐼', '🐸', '🐯', '🦁', '🐮', '🐷',
+                 '🐨', '🐰', '🦉', '🦄', '🐙', '🦈', '🐺', '🐝',
+                 '🦋', '🐢', '🐳', '🦅', '🐴', '🐲', '👻', '🎃'];
+
 /* Number of mafia for a given player count. */
 function mafiaCount(n) {
   return Math.max(1, Math.round(n / 4));
