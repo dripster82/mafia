@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mafia Night</title>
+<script>
+// GitHub Pages serves this for unknown paths. Turn a pretty invite link
+// like /mafia/QWXZR into the app URL with the room code pre-filled.
+(function () {
+  var m = location.pathname.match(/([A-Za-z]{5})\/?$/);
+  var base = location.pathname.replace(/[^/]*\/?$/, '');
+  location.replace(base + (m ? '?join=' + m[1].toUpperCase() : ''));
+})();
+</script>
+</head>
+<body>
+<p>Redirecting to <a href="./">Mafia Night</a>…</p>
+</body>
+</html>

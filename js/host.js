@@ -451,18 +451,17 @@ const Host = (() => {
     if (!G) return;
     const c = el('host-controls-area');
     if (!c) return;
-    const joinURL = location.origin + location.pathname;
-
     let html = '';
 
     if (G.phase === 'lobby') {
       const n = G.players.length;
       html += `
         <div class="card room-code-box">
-          <div class="muted small-text">Players join at</div>
-          <div class="url">${esc(joinURL)}</div>
-          <div class="muted small-text" style="margin-top:10px">with room code</div>
+          <div class="muted small-text">Room code</div>
           <div class="code">${roomCode || '·····'}</div>
+          ${roomCode ? App.qrSvgFor(roomCode) : ''}
+          <div class="muted small-text">Scan to join, or open</div>
+          <div class="url">${roomCode ? esc(App.joinLinkFor(roomCode)) : ''}</div>
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>

@@ -217,6 +217,13 @@ const Player = (() => {
         <h2>You're in, ${esc(view.you.name)}!</h2>
         <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}</div>`;
+      if (!local && view.roomCode) {
+        html += `<div class="card room-code-box">
+          <div class="muted small-text">Invite others — scan to join room <strong>${esc(view.roomCode)}</strong></div>
+          ${App.qrSvgFor(view.roomCode)}
+          <div class="url">${esc(App.joinLinkFor(view.roomCode))}</div>
+        </div>`;
+      }
       html += playersListHTML(false);
     }
 

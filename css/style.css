@@ -102,6 +102,13 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .room-code-box .url { color: var(--muted); font-size: 0.85rem; word-break: break-all; }
 
+/* QR invite code */
+.qr-box {
+  background: #fff; border-radius: 12px; padding: 12px;
+  width: 180px; height: 180px; margin: 12px auto;
+}
+.qr-box svg { display: block; width: 100%; height: 100%; }
+
 /* Player lists */
 .player-list { display: flex; flex-direction: column; gap: 8px; }
 .player-row {

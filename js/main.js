@@ -3,6 +3,26 @@
 const App = (() => {
   const el = id => document.getElementById(id);
 
+  /* Pretty invite link, e.g. https://user.github.io/mafia/QWXZR.
+   * 404.html turns that path back into ?join=QWXZR on GitHub Pages. */
+  function joinLinkFor(code) {
+    let base = location.origin + location.pathname.replace(/index\.html$/, '');
+    if (!base.endsWith('/')) base += '/';
+    return base + code;
+  }
+
+  /* SVG QR code for the invite link, on a white tile so cameras can read it. */
+  function qrSvgFor(code) {
+    try {
+      const qr = qrcode(0, 'M');
+      qr.addData(joinLinkFor(code));
+      qr.make();
+      return `<div class="qr-box">${qr.createSvgTag({ cellSize: 4, margin: 0, scalable: true })}</div>`;
+    } catch (e) {
+      return '';
+    }
+  }
+
   function showScreen(name) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     el('screen-' + name).classList.add('active');
@@ -81,5 +101,5 @@ const App = (() => {
 
   document.addEventListener('DOMContentLoaded', init);
 
-  return { showScreen, showJoinError };
+  return { showScreen, showJoinError, joinLinkFor, qrSvgFor };
 })();
