@@ -286,7 +286,52 @@ const Host = (() => {
     if (/\b(hi|hello|hey|morning|yo)\b/.test(lower)) {
       return rndOf(['Hey 👋', 'Morning. Rough night, huh?', 'Hello there.', 'Yo. Trust no one.']);
     }
-    return rndOf(['Hmm. Noted.', 'Interesting theory…', 'I’m listening.', 'Go on…', 'Say that a little louder for the table.']);
+
+    // A statement aimed at the bot — engage with the substance.
+    const mentionedOthers = alivePlayers().filter(t => t.id !== bot.id && lower.includes(t.name.toLowerCase()));
+    if (mentionedOthers.length) {
+      const m = rndOf(mentionedOthers);
+      const sm = G.suspicion[m.id] || 0;
+      if (bot.role === 'detective' && bot.intel) {
+        const rec = bot.intel.find(i => i.targetId === m.id);
+        if (rec) {
+          return rec.isMafia
+            ? rndOf([`Funny you mention ${m.name}… my gut says you're onto something.`, `Keep talking about ${m.name}. You might be right.`])
+            : rndOf([`${m.name}? No — I'd stake my badge they're clean.`, `You're wasting breath on ${m.name}. Look elsewhere.`]);
+        }
+      }
+      if (teamOf(bot) === 'mafia' && teamOf(m) === 'mafia') {
+        return rndOf([`${m.name}? Nah, I don't see it.`, `You're reaching — ${m.name} is harmless.`, `${m.name}? They can barely stay awake, let alone kill.`]);
+      }
+      if (sm >= 2) {
+        return rndOf([`${m.name}? Honestly… could be. They've been twitchy.`, `I've had my eye on ${m.name} too.`, `Go on — what exactly did ${m.name} do?`]);
+      }
+      if (sm <= -2) {
+        return rndOf([`${m.name} seems clean to me.`, `I don't buy ${m.name} being involved.`]);
+      }
+      return rndOf([`${m.name}… I hadn't considered them. Tell me more.`, `What makes you say ${m.name}?`, `Hmm, ${m.name}. I'll be watching them today.`]);
+    }
+
+    // No names in it — answer with an actual opinion, not a shrug.
+    const ci2 = bot.chatIntent && bot.chatIntent.day === G.dayNum ? bot.chatIntent.target : null;
+    const lean = ci2 && ci2 !== 'nobody' ? getPlayer(ci2) : null;
+    if (lean && lean.alive) {
+      return rndOf([
+        `All I know is ${lean.name} keeps dodging questions.`,
+        `For the record, my vote's leaning ${lean.name}.`,
+        `While we're all talking, ${lean.name} has said remarkably little…`,
+      ]);
+    }
+    if (bot.role === 'jester') {
+      return rndOf(['Fascinating. Anyway, has anyone considered voting ME? Just spitballing.', 'Love the chaos. More of this please.']);
+    }
+    return rndOf([
+      `${alivePlayers().length} of us left, and at least one is lying through their teeth.`,
+      'Watch who talks the most… and who says nothing at all.',
+      'The quiet ones worry me more than the loud ones.',
+      'I’ve been counting votes all day. Something doesn’t add up.',
+      'Nobody leaves this table until we figure this out.',
+    ]);
   }
 
   /* A suspicious valid target for a bot — weighted-random among everyone over
