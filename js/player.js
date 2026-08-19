@@ -11,6 +11,7 @@ const Player = (() => {
   let investigations = []; // {name, isMafia}
   let connected = false;
   let reconnectTimer = null;
+  let connectTimer = null;
   let local = false;               // true when this client is the host's own seat
   let mount = 'player-content';    // container the player view renders into
   let pillId = 'player-room-pill';
@@ -68,7 +69,16 @@ const Player = (() => {
     cleanup(false);
     renderStatus('Connecting to the game…');
 
-    peer = new Peer(Object.assign({ debug: 1 }, window.MAFIA_PEER_CONFIG || {}));
+    // If the data channel can't be established (blocked network, NAT the
+    // relay can't cross), fail with a clear message instead of spinning.
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(() => {
+      if (!connected && !view) {
+        fatal('Couldn’t reach the host after 20 seconds. Make sure both devices are online (Wi-Fi and cellular both work), then try again.');
+      }
+    }, 20000);
+
+    peer = new Peer(Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
     peer.on('open', () => {
       conn = peer.connect(Host.PEER_PREFIX + roomCode, { reliable: true });
       conn.on('open', () => {
@@ -100,6 +110,7 @@ const Player = (() => {
 
   function cleanup(full) {
     clearTimeout(reconnectTimer);
+    clearTimeout(connectTimer);
     if (conn) { try { conn.close(); } catch (e) {} conn = null; }
     if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
     connected = false;

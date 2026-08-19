@@ -86,10 +86,19 @@ const App = (() => {
       Player.join(code, name);
     }
 
-    // Support ?join=CODE links and refresh-resume.
+    // Support ?join=CODE links and refresh-resume. A join link for a
+    // DIFFERENT room always beats resuming an old session — otherwise a tab
+    // with a stale session would silently reconnect to the previous room.
     const params = new URLSearchParams(location.search);
     const codeParam = (params.get('join') || '').toUpperCase();
-    if (!Player.tryResume() && codeParam) {
+    let stored = null;
+    try { stored = JSON.parse(sessionStorage.getItem('mafia-session')); } catch (e) {}
+    if (codeParam && (!stored || stored.roomCode !== codeParam)) {
+      sessionStorage.removeItem('mafia-session');
+      showScreen('join');
+      el('join-code').value = codeParam;
+      el('join-name').focus();
+    } else if (!Player.tryResume() && codeParam) {
       showScreen('join');
       el('join-code').value = codeParam;
       el('join-name').focus();

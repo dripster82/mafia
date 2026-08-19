@@ -58,7 +58,7 @@ const Host = (() => {
 
     attachLocalPlayer(hostName);
 
-    peer = new Peer(PEER_PREFIX + roomCode, Object.assign({ debug: 1 }, window.MAFIA_PEER_CONFIG || {}));
+    peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
     peer.on('open', () => {
       document.getElementById('host-room-pill').textContent = 'Room: ' + roomCode;
       render();

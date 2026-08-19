@@ -48,4 +48,4 @@ site on every push to `main`:
 
 - The host's browser **is** the server: if the host closes or reloads the page, the game is lost (players who reload can rejoin automatically).
 - Connections use PeerJS's free public broker for the initial handshake; game traffic itself is peer-to-peer.
-- Devices behind very restrictive NATs/firewalls may fail to connect (no TURN relay is configured).
+- Connections try direct peer-to-peer first (STUN) and fall back to a free public TURN relay (Open Relay), so devices on different networks — e.g. cellular vs Wi-Fi — can still connect. Heavily filtered networks may still block WebRTC entirely.
