@@ -26,12 +26,23 @@ the lobby, play again) showing only public information.
 
 ### Roles
 
-| Role | Team | Night action |
-|---|---|---|
-| 🔪 Mafia (~1 per 4 players) | Mafia | Choose someone to eliminate (majority pick if several mafia) |
-| 💉 Doctor | Town | Protect one person (self allowed) |
-| 🔍 Detective | Town | Learn whether one person is mafia |
-| 🧑‍🌾 Villager | Town | Sleep |
+Core: 🔪 Mafia, 💉 Doctor, 🔍 Detective, 🧑‍🌾 Villager. The host can enable
+extra roles per game:
+
+- **Village:** 🛡️ Bodyguard (dies in the target's place), 🔫 Vigilante (two
+  bullets from Night 2; killing town holsters the gun), 🪟 Watcher (sees who
+  visited someone), 👣 Tracker (sees who someone visited), 🔬 Coroner (reads
+  a body's true role), 📒 Bookkeeper (nightly count of living mafia),
+  🎖️ Mayor (go public once: proven village, double vote), ⚰️ Mortician
+  (raise one dead villager).
+- **Mafia:** 🎩 Don (reads innocent to the Detective), 🔧 Fixer (blocks a
+  night action), 🖼️ Framer (frames someone as mafia), ☠️ Poisoner (delayed
+  kill unless healed the following night), 🧠 Consigliere (learns exact
+  roles), ✒️ Forger (destroys last words, twice), 🧹 Cleaner (hides a
+  victim's role, twice), 🤝 Recruiter (turns a villager once).
+- **Neutral:** 🃏 Jester (wins by being voted out), 🪓 Executioner (wins if
+  their personal target is voted out), 🎒 Drifter (wins by surviving; can lie
+  low twice).
 
 ## Deploying to GitHub Pages
 

@@ -14,12 +14,20 @@ const Host = (() => {
   let localConn = null; // the host's own loopback connection
   let hostName = null;
   let G = null;        // game state
-  let settings = { safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false, vigilante: false, jester: false, nightTimer: 120, dayTimer: 300 }; // survives new games
+  let settings = {
+    safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false,
+    nightTimer: 120, dayTimer: 300,
+    roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
+             tracker: false, coroner: false, bookkeeper: false, mayor: false,
+             mortician: false, fixer: false, framer: false, poisoner: false,
+             consigliere: false, forger: false, cleaner: false, recruiter: false,
+             jester: false, executioner: false, drifter: false },
+  };
+  let phaseTimer = null; // auto-advance timeout for the current phase
 
   function deckOpts() {
-    return { maxMafia: settings.maxMafia, vigilante: settings.vigilante, jester: settings.jester };
+    return { maxMafia: settings.maxMafia, roles: settings.roles };
   }
-  let phaseTimer = null; // auto-advance timeout for the current phase
 
   /* Arm (or clear, with seconds=0) the current phase's auto-advance timer. */
   function setPhaseTimer(seconds, fn) {
@@ -33,27 +41,39 @@ const Host = (() => {
 
   function freshGame() {
     return {
-      phase: 'lobby',      // lobby | reveal | night | day | ended
+      phase: 'lobby',      // lobby | reveal | night | day | verdict | ended
       dayNum: 0,
       confirms: {},        // reveal phase: playerId -> true once they've seen their role
-      players: [],         // {id, name, role, alive, connected, causeOfDeath}
-      night: null,         // {actions: {playerId: targetId}}
+      players: [],
+      night: null,         // {actions: {playerId: targetId|'skip'|pseudo}}
       votes: null,         // {playerId: targetId|'nobody'}
       announce: null,      // latest event to show players
       winner: null,
       lastWords: null,     // final message from a vote-eliminated player
       chat: [],            // lobby + day table talk, cleared each night
       log: [],             // public information only — the host can read this
+      deadline: null,
     };
   }
 
   function alivePlayers() { return G.players.filter(p => p.alive); }
-  function aliveMafia() { return alivePlayers().filter(p => p.role === 'mafia'); }
+  function teamOf(p) {
+    if (p.recruited) return 'mafia';
+    return p.role && ROLES[p.role] ? ROLES[p.role].team : 'town';
+  }
+  function aliveMafia() { return alivePlayers().filter(p => teamOf(p) === 'mafia'); }
+  function killers() { return alivePlayers().filter(p => p.role === 'mafia' || p.role === 'don'); }
   function getPlayer(id) { return G.players.find(p => p.id === id); }
   function nameOf(id) { const p = getPlayer(id); return p ? p.name : '?'; }
+  const rndOf = a => a[Math.floor(Math.random() * a.length)];
 
   function addLog(text, important) {
     G.log.push({ text, important: !!important });
+  }
+
+  /* Private dawn intelligence for one player. */
+  function report(p, line) {
+    send(p.id, { t: 'report', line: `Night ${G.dayNum}: ${line}` });
   }
 
   /* ---------------- lifecycle ---------------- */
@@ -65,8 +85,6 @@ const Host = (() => {
     G = freshGame();
     conns = {};
 
-    // The host screen holds two areas: our controls, and the host's own
-    // player view (rendered by the Player module through the loopback).
     document.getElementById('host-content').innerHTML =
       '<div id="host-player-area"></div><div id="host-controls-area"></div>';
 
@@ -84,7 +102,6 @@ const Host = (() => {
     });
     peer.on('error', err => {
       if (err.type === 'unavailable-id') {
-        // Code collision — extremely unlikely, just pick another.
         peer.destroy();
         create(hostName);
       } else if (err.type !== 'peer-unavailable') {
@@ -92,15 +109,11 @@ const Host = (() => {
       }
     });
     peer.on('disconnected', () => {
-      // Lost connection to the signalling broker; existing player links keep
-      // working, but new players can't join. Try to get it back.
       try { peer.reconnect(); } catch (e) { /* destroyed */ }
     });
     render();
   }
 
-  /* The host's own seat: a fake connection that loops straight into the
-   * Player module on this same page. */
   function attachLocalPlayer(name) {
     localConn = {
       open: true,
@@ -112,9 +125,738 @@ const Host = (() => {
     handleJoin(localConn, { t: 'join', name });
   }
 
-  /* ---------------- bot players (for solo testing / filling seats) ----------------
-   * Bots join through loopback connections like the host's own seat, get
-   * dealt roles, and act on a short random delay. */
+  function destroy() {
+    if (peer) { try { peer.destroy(); } catch (e) {} }
+    peer = null; G = null; conns = {}; localConn = null;
+  }
+
+  /* ---------------- messaging ---------------- */
+
+  function send(playerId, msg) {
+    const c = conns[playerId];
+    if (c && c.open) { try { c.send(msg); } catch (e) {} }
+  }
+
+  function handleDisconnect(conn) {
+    const p = G && G.players.find(pl => pl.id === conn._playerId);
+    if (p) {
+      if (conns[p.id] === conn) {
+        p.connected = false;
+        delete conns[p.id];
+      }
+      if (G.phase === 'lobby') {
+        G.players = G.players.filter(pl => pl.id !== p.id);
+      }
+      broadcast();
+    }
+  }
+
+  function handleMessage(conn, msg) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.t === 'join') return handleJoin(conn, msg);
+    const p = G.players.find(pl => pl.id === conn._playerId);
+    if (!p) return;
+    if (msg.t === 'night') return handleNightAction(p, msg.target);
+    if (msg.t === 'vote') return handleVote(p, msg.target);
+    if (msg.t === 'profile') return handleProfile(p, msg);
+    if (msg.t === 'confirm') return handleConfirm(p);
+    if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
+    if (msg.t === 'chat') return handleChat(p, msg.text);
+    if (msg.t === 'lastWords') return handleLastWords(p, msg.text);
+  }
+
+  /* Table talk: lobby (waiting banter) and day (discussion). */
+  function handleChat(p, text) {
+    if ((G.phase !== 'day' && G.phase !== 'lobby') || !p.alive) return;
+    text = String(text || '').trim().slice(0, 200);
+    if (!text) return;
+    G.chat.push({ name: p.name, avatar: p.avatar, text });
+    if (G.chat.length > 100) G.chat = G.chat.slice(-100);
+    broadcast();
+  }
+
+  function handleJoin(conn, msg) {
+    const name = String(msg.name || '').trim().slice(0, 16);
+    if (!name) { conn.send({ t: 'error', fatal: true, msg: 'Please enter a name.' }); return; }
+
+    let p = msg.playerId ? G.players.find(pl => pl.id === msg.playerId) : null;
+    if (!p && G.phase !== 'lobby') {
+      p = G.players.find(pl => !pl.connected && pl.name.toLowerCase() === name.toLowerCase());
+    }
+
+    if (p) {
+      if (p.connected && conns[p.id] && conns[p.id].open && conns[p.id] !== conn) {
+        conn.send({ t: 'error', fatal: true, msg: 'That player is already connected on another device.' });
+        return;
+      }
+    } else {
+      if (G.players.some(pl => pl.name.toLowerCase() === name.toLowerCase())) {
+        conn.send({ t: 'error', fatal: true, msg: 'That name is taken — pick another.' });
+        return;
+      }
+      const midGame = G.phase !== 'lobby';
+      p = {
+        id: 'p' + Math.random().toString(36).slice(2, 10),
+        name, role: null, alive: !midGame, connected: true, causeOfDeath: null,
+        avatar: AVATARS[G.players.length % AVATARS.length],
+        spectator: midGame,
+      };
+      G.players.push(p);
+      if (midGame) addLog(`${name} joined as a spectator.`);
+    }
+
+    p.connected = true;
+    conn._playerId = p.id;
+    conns[p.id] = conn;
+    conn.send({ t: 'joined', playerId: p.id, roomCode });
+    broadcast();
+  }
+
+  /* Lobby-only: rename and avatar changes. */
+  function handleProfile(p, msg) {
+    if (G.phase !== 'lobby') return;
+    if (msg.avatar && AVATARS.includes(msg.avatar)) {
+      p.avatar = msg.avatar;
+    }
+    if (msg.name !== undefined) {
+      const name = String(msg.name || '').trim().slice(0, 16);
+      if (!name) {
+        send(p.id, { t: 'toast', msg: 'Names can’t be empty.' });
+      } else if (G.players.some(pl => pl.id !== p.id && pl.name.toLowerCase() === name.toLowerCase())) {
+        send(p.id, { t: 'toast', msg: 'That name is taken — pick another.' });
+      } else {
+        p.name = name;
+      }
+    }
+    broadcast();
+  }
+
+  /* ---------------- game flow ---------------- */
+
+  function startGame() {
+    const connected = G.players.filter(p => p.connected);
+    if (connected.length < MIN_PLAYERS) return;
+    G.players = connected;
+    const deck = buildRoleDeck(G.players.length, deckOpts());
+    G.players.forEach((p, i) => {
+      p.role = deck[i]; p.alive = true;
+      p.bullets = 2; p.guilt = false; p.usedRaise = false;
+      p.forgerUses = 2; p.cleanerUses = 2; p.recruiterUsed = false;
+      p.drifterUses = 2; p.pledged = false; p.poisonedNight = null;
+      p.cleaned = false; p.forged = false; p.recruited = false;
+      p.execTargetId = null; p.achievedWin = false; p.lostWin = false;
+      p.actions = []; p.intel = [];
+    });
+    // Each executioner gets a personal grudge against a random townsperson.
+    G.players.filter(p => p.role === 'executioner').forEach(ex => {
+      const towns = G.players.filter(t => t.id !== ex.id && ROLES[t.role].team === 'town');
+      if (towns.length) ex.execTargetId = rndOf(towns).id;
+    });
+    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, deckOpts())}).`, true);
+    G.phase = 'reveal';
+    G.confirms = {};
+    setPhaseTimer(0);
+    broadcast();
+  }
+
+  function soloHuman(p) {
+    return !p.isBot && G.players.every(pl => pl.id === p.id || pl.isBot);
+  }
+
+  function handlePickRole(p, roleId) {
+    if (G.phase !== 'reveal' || G.confirms[p.id] || !soloHuman(p)) return;
+    if (!ROLES[roleId] || p.role === roleId) return;
+    const other = G.players.find(pl => pl.id !== p.id && pl.role === roleId);
+    if (!other) return;
+    other.role = p.role;
+    p.role = roleId;
+    // Re-target any executioner involved in the swap.
+    G.players.filter(x => x.role === 'executioner').forEach(ex => {
+      const towns = G.players.filter(t => t.id !== ex.id && ROLES[t.role].team === 'town');
+      if (towns.length && (!ex.execTargetId || !towns.some(t => t.id === ex.execTargetId))) {
+        ex.execTargetId = rndOf(towns).id;
+      }
+    });
+    broadcast();
+  }
+
+  function handleConfirm(p) {
+    if (G.phase !== 'reveal' || G.confirms[p.id]) return;
+    G.confirms[p.id] = true;
+    if (G.players.filter(pl => !pl.spectator).every(pl => G.confirms[pl.id])) startNight();
+    else broadcast();
+  }
+
+  function startNight() {
+    G.dayNum += 1;
+    G.phase = 'night';
+    G.night = { actions: {} };
+    G.votes = null;
+    G.chat = [];
+    setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
+    addLog(`Night ${G.dayNum} falls. The town sleeps.`);
+    broadcast();
+  }
+
+  /* What (if anything) this player decides tonight. Null = they sleep. */
+  function nightUIFor(p) {
+    if (!p.alive || p.spectator) return null;
+    const others = alivePlayers().filter(t => t.id !== p.id);
+    const nonMafia = alivePlayers().filter(t => teamOf(t) !== 'mafia');
+    const deadBodies = G.players.filter(t => !t.alive && !t.spectator && t.role);
+    const mk = list => list.map(t => ({ id: t.id, name: t.name, avatar: t.avatar }));
+    const r = p.role;
+
+    if (r === 'mafia' || r === 'don') {
+      return { prompt: 'Choose someone to eliminate tonight', targets: mk(nonMafia), canSkip: true, skipLabel: '🕊 Make no kill tonight' };
+    }
+    if (r === 'doctor') {
+      const ts = alivePlayers().filter(t => !settings.noSelfHeal || t.id !== p.id);
+      return { prompt: 'Choose someone to protect tonight', targets: mk(ts) };
+    }
+    if (r === 'detective') return { prompt: 'Choose someone to investigate tonight', targets: mk(others) };
+    if (r === 'vigilante') {
+      if (G.dayNum < 2 || p.bullets <= 0 || p.guilt) return null;
+      return { prompt: `Shoot someone (${p.bullets} bullet${p.bullets > 1 ? 's' : ''} left) — or hold your fire`, targets: mk(others), canSkip: true, skipLabel: '🕊 Hold your fire' };
+    }
+    if (r === 'mortician') {
+      if (p.usedRaise) return null;
+      const raisable = deadBodies.filter(t => ROLES[t.role].team === 'town');
+      if (!raisable.length) return null;
+      return { prompt: 'Raise a fallen villager at dawn — or wait', targets: mk(raisable), canSkip: true, skipLabel: '⏳ Wait — save your power' };
+    }
+    if (r === 'watcher') return { prompt: 'Choose whose door to watch tonight', targets: mk(others) };
+    if (r === 'bodyguard') return { prompt: 'Choose someone to guard tonight', targets: mk(others) };
+    if (r === 'tracker') return { prompt: 'Choose someone to follow tonight', targets: mk(others) };
+    if (r === 'coroner') {
+      if (!deadBodies.length) return null;
+      return { prompt: 'Choose a body to examine tonight', targets: mk(deadBodies), canSkip: true, skipLabel: '🚪 Leave the morgue' };
+    }
+    if (r === 'mayor') {
+      if (p.pledged) return null;
+      return { prompt: 'Go public — or stay quiet', targets: [{ id: 'pledge', name: '📣 Pledge — go public at dawn', avatar: '' }], canSkip: true, skipLabel: '🤫 Stay quiet' };
+    }
+    if (r === 'fixer') return { prompt: 'Choose whose night action to prevent', targets: mk(nonMafia.filter(t => t.id !== p.id)), canSkip: true, skipLabel: 'Do nothing tonight' };
+    if (r === 'framer') return { prompt: 'Choose someone to frame tonight', targets: mk(nonMafia.filter(t => t.id !== p.id)), canSkip: true, skipLabel: 'Do nothing tonight' };
+    if (r === 'poisoner') return { prompt: 'Choose someone to poison tonight', targets: mk(nonMafia.filter(t => t.id !== p.id)), canSkip: true, skipLabel: 'Do nothing tonight' };
+    if (r === 'consigliere') return { prompt: 'Choose someone to investigate tonight', targets: mk(nonMafia.filter(t => t.id !== p.id)), canSkip: true, skipLabel: 'Do nothing tonight' };
+    if (r === 'forger') {
+      if (p.forgerUses <= 0) return null;
+      return { prompt: `Mark someone’s last words for destruction (${p.forgerUses} left) — or wait`, targets: mk(nonMafia.filter(t => t.id !== p.id && !t.forged)), canSkip: true, skipLabel: '⏳ Wait' };
+    }
+    if (r === 'cleaner') {
+      if (p.cleanerUses <= 0) return null;
+      return { prompt: `Clean tonight’s kill (${p.cleanerUses} left) — or wait`, targets: [{ id: 'clean', name: '🧹 Clean tonight’s kill', avatar: '' }], canSkip: true, skipLabel: '⏳ Wait' };
+    }
+    if (r === 'recruiter') {
+      if (p.recruiterUsed || G.dayNum < 2) return null;
+      return { prompt: 'Turn a villager instead of killing tonight — or wait', targets: mk(nonMafia.filter(t => t.id !== p.id)), canSkip: true, skipLabel: '⏳ Not tonight' };
+    }
+    if (r === 'drifter') {
+      if (p.drifterUses <= 0) return null;
+      return { prompt: `Lie low tonight? (${p.drifterUses} left)`, targets: [{ id: 'hide', name: '🎒 Lie low — nothing can touch you', avatar: '' }], canSkip: true, skipLabel: '😴 Sleep normally' };
+    }
+    return null;
+  }
+
+  function nightActors() {
+    return alivePlayers().filter(p => nightUIFor(p) !== null);
+  }
+
+  function handleNightAction(p, targetId) {
+    if (G.phase !== 'night') return;
+    const ui = nightUIFor(p);
+    if (!ui) return;
+    const isSkip = targetId === 'skip';
+    if (isSkip && !ui.canSkip) return;
+    if (!isSkip && !ui.targets.some(t => t.id === targetId)) return;
+    G.night.actions[p.id] = targetId;
+
+    const pseudo = targetId === 'pledge' || targetId === 'hide' || targetId === 'clean';
+    (p.actions = p.actions || []).push({
+      night: G.dayNum, role: p.role,
+      target: (isSkip || pseudo) ? null : nameOf(targetId),
+      skip: isSkip, special: pseudo ? targetId : null,
+      result: null,
+    });
+
+    maybeResolveNight();
+    broadcast();
+  }
+
+  function maybeResolveNight() {
+    const pending = nightActors().filter(p => !(p.id in G.night.actions));
+    if (pending.length === 0) resolveNight();
+  }
+
+  function forceEndNight() { resolveNight(true); }
+
+  function resolveNight(forced) {
+    if (G.phase !== 'night') return;
+    const A = G.night.actions;
+    const visits = []; // {visitor, target}
+    const recapResult = (p, text) => {
+      const last = (p.actions || []).filter(a => a.night === G.dayNum).pop();
+      if (last) last.result = text;
+    };
+
+    // 1. Fixer blocks (mafia-team, unblockable themselves).
+    const blocked = new Set();
+    alivePlayers().filter(p => p.role === 'fixer').forEach(f => {
+      const t = A[f.id];
+      if (t && t !== 'skip') { blocked.add(t); visits.push({ visitor: f.id, target: t }); }
+    });
+    const eff = p => blocked.has(p.id) ? undefined : A[p.id];
+
+    // 2. Drifter immunity.
+    const immune = new Set();
+    alivePlayers().filter(p => p.role === 'drifter').forEach(d => {
+      if (eff(d) === 'hide') { immune.add(d.id); d.drifterUses--; }
+    });
+
+    // 3. Framing (applies to tonight's investigations).
+    const framed = new Set();
+    alivePlayers().filter(p => p.role === 'framer').forEach(f => {
+      const t = eff(f);
+      if (t && t !== 'skip') { framed.add(t); visits.push({ visitor: f.id, target: t }); }
+    });
+
+    // 4. Protection.
+    let savedId = null;
+    alivePlayers().filter(p => p.role === 'doctor').forEach(d => {
+      const t = eff(d);
+      if (t && t !== 'skip') { savedId = t; visits.push({ visitor: d.id, target: t }); }
+    });
+    const guards = {}; // targetId -> bodyguard
+    alivePlayers().filter(p => p.role === 'bodyguard').forEach(b => {
+      const t = eff(b);
+      if (t && t !== 'skip') { guards[t] = b; visits.push({ visitor: b.id, target: t }); }
+    });
+
+    // 5. Mafia kill vote (killers only; recruiter's offer replaces the kill).
+    const mafiaPicks = killers().map(m => A[m.id]).filter(t => t && t !== 'skip');
+    let killTarget = null;
+    if (mafiaPicks.length) {
+      const tally = {};
+      mafiaPicks.forEach(t => { tally[t] = (tally[t] || 0) + 1; });
+      const max = Math.max(...Object.values(tally));
+      killTarget = rndOf(Object.keys(tally).filter(t => tally[t] === max));
+    }
+
+    // Recruiter: turning someone cancels the family's kill tonight.
+    let recruitedName = null;
+    alivePlayers().filter(p => p.role === 'recruiter' && !p.recruiterUsed).forEach(rc => {
+      const t = eff(rc);
+      if (t && t !== 'skip' && G.dayNum >= 2) {
+        const target = getPlayer(t);
+        if (target && target.alive && teamOf(target) !== 'mafia') {
+          rc.recruiterUsed = true;
+          target.recruited = true;
+          killTarget = null;
+          recruitedName = target.name;
+          visits.push({ visitor: rc.id, target: t });
+          report(target, '🤝 The mafia made you an offer you couldn’t refuse. You are now on their side — you win with the mafia. Nobody else knows.');
+          report(rc, `🤝 ${target.name} accepted the offer. They're one of ours now.`);
+          recapResult(rc, `recruited ${target.name}`);
+        }
+      }
+    });
+
+    if (killTarget) {
+      const voter = rndOf(killers().filter(m => A[m.id] === killTarget));
+      if (voter) visits.push({ visitor: voter.id, target: killTarget });
+    }
+
+    // 6. Vigilante shots.
+    const shots = []; // {shooter, target}
+    alivePlayers().filter(p => p.role === 'vigilante').forEach(v => {
+      const t = eff(v);
+      if (t && t !== 'skip' && G.dayNum >= 2 && v.bullets > 0 && !v.guilt) {
+        v.bullets--;
+        shots.push({ shooter: v, target: t });
+        visits.push({ visitor: v.id, target: t });
+      }
+    });
+
+    // 7. Resolve attacks.
+    const deaths = new Map(); // id -> cause
+    let saved = false;
+    const attack = (targetId, cause, guardable) => {
+      if (immune.has(targetId)) return;
+      if (targetId === savedId) { saved = true; return; }
+      const guard = guardable ? guards[targetId] : null;
+      if (guard && guard.alive) {
+        if (guard.id === savedId) { saved = true; return; }
+        deaths.set(guard.id, 'guard');
+        return;
+      }
+      deaths.set(targetId, cause);
+    };
+    if (killTarget) attack(killTarget, 'mafia', true);
+    shots.forEach(s => attack(s.target, 'vigilante', false));
+
+    // 8. New poisons + pending poison deaths.
+    alivePlayers().filter(p => p.role === 'poisoner').forEach(po => {
+      const t = eff(po);
+      if (t && t !== 'skip') {
+        const target = getPlayer(t);
+        if (target && target.alive) { target.poisonedNight = G.dayNum; visits.push({ visitor: po.id, target: t }); }
+      }
+    });
+    alivePlayers().forEach(p => {
+      if (p.poisonedNight !== null && p.poisonedNight === G.dayNum - 1 && !deaths.has(p.id)) {
+        if (p.id === savedId) { p.poisonedNight = null; report(p, '💊 You woke feeling terrible — the doctor pulled you back from the brink.'); }
+        else if (!immune.has(p.id)) deaths.set(p.id, 'poison');
+      }
+    });
+
+    // 9. Apply deaths (safe first night wounds instead, poison excepted).
+    const killed = [];
+    const woundedNames = [];
+    deaths.forEach((cause, id) => {
+      const victim = getPlayer(id);
+      if (G.dayNum === 1 && settings.safeFirstNight && cause !== 'poison') {
+        woundedNames.push(victim.name);
+        return;
+      }
+      victim.alive = false;
+      victim.causeOfDeath = cause;
+      killed.push({ id, name: victim.name, role: victim.role, cause });
+    });
+
+    // 10. Cleaner hides the family victim's role.
+    alivePlayers().filter(p => p.role === 'cleaner' && p.cleanerUses > 0).forEach(c => {
+      if (eff(c) === 'clean') {
+        const k = killed.find(x => x.cause === 'mafia');
+        if (k) {
+          c.cleanerUses--;
+          getPlayer(k.id).cleaned = true;
+          report(c, `🧹 You cleaned the scene. ${k.name} was the ${ROLES[k.role].name} — only you know.`);
+          recapResult(c, `cleaned ${k.name}'s body`);
+          k.role = null; // public announcement shows no role
+        }
+      }
+    });
+
+    // 11. Forger marks.
+    alivePlayers().filter(p => p.role === 'forger' && p.forgerUses > 0).forEach(f => {
+      const t = eff(f);
+      if (t && t !== 'skip') {
+        const target = getPlayer(t);
+        if (target && !target.forged) {
+          f.forgerUses--;
+          target.forged = true;
+          report(f, `✒️ Prepared a forgery for ${target.name}'s last words.`);
+        }
+      }
+    });
+
+    // 12. Mortician revival (bodies from before tonight).
+    let revivedName = null;
+    alivePlayers().filter(p => p.role === 'mortician' && !p.usedRaise).forEach(m => {
+      const t = eff(m);
+      if (t && t !== 'skip') {
+        const body = getPlayer(t);
+        if (body && !body.alive && !killed.some(k => k.id === t) && ROLES[body.role] && ROLES[body.role].team === 'town') {
+          m.usedRaise = true;
+          body.alive = true;
+          body.causeOfDeath = null;
+          body.poisonedNight = null;
+          revivedName = body.name;
+          report(body, '⚰️ You gasp awake — the Mortician has raised you from the dead!');
+          recapResult(m, `raised ${body.name} from the dead`);
+        }
+      }
+    });
+
+    // 13. Executioner grudges dying the wrong way.
+    G.players.filter(x => x.role === 'executioner' && !x.achievedWin && !x.lostWin).forEach(ex => {
+      if (ex.execTargetId && killed.some(k => k.id === ex.execTargetId)) {
+        ex.lostWin = true;
+        report(ex, '🪓 Your target is dead — but not by the town’s hand. Your grudge dies unsettled.');
+      }
+    });
+
+    // 14. Dawn intelligence.
+    alivePlayers().forEach(p => {
+      if (blocked.has(p.id)) report(p, '🚫 Someone prevented you from acting last night.');
+    });
+    alivePlayers().filter(p => p.role === 'detective').forEach(d => {
+      const t = eff(d);
+      if (t && t !== 'skip') {
+        const target = getPlayer(t);
+        if (target) {
+          const reads = target.role === 'don' ? false : (framed.has(t) || teamOf(target) === 'mafia');
+          if (d.isBot) (d.intel = d.intel || []).push({ targetId: t, isMafia: reads });
+          report(d, `🔍 ${target.name} is ${reads ? 'MAFIA 🔪' : 'not mafia ✅'}`);
+          recapResult(d, reads ? 'mafia' : 'not mafia');
+        }
+      }
+    });
+    alivePlayers().filter(p => p.role === 'consigliere').forEach(c => {
+      const t = eff(c);
+      if (t && t !== 'skip') {
+        const target = getPlayer(t);
+        if (target && target.role) {
+          report(c, `🧠 ${target.name} is the ${ROLES[target.role].icon} ${ROLES[target.role].name}.`);
+          recapResult(c, ROLES[target.role].name);
+        }
+      }
+    });
+    alivePlayers().filter(p => p.role === 'watcher').forEach(w => {
+      const t = eff(w);
+      if (t && t !== 'skip') {
+        const callers = visits.filter(v => v.target === t && v.visitor !== w.id).map(v => nameOf(v.visitor));
+        report(w, callers.length
+          ? `🪟 Visitors at ${nameOf(t)}'s door: ${[...new Set(callers)].join(', ')}.`
+          : `🪟 No one came to ${nameOf(t)}'s door.`);
+        recapResult(w, callers.length ? [...new Set(callers)].join(', ') : 'no visitors');
+      }
+    });
+    alivePlayers().filter(p => p.role === 'tracker').forEach(tr => {
+      const t = eff(tr);
+      if (t && t !== 'skip') {
+        const went = visits.find(v => v.visitor === t);
+        report(tr, went
+          ? `👣 ${nameOf(t)} went to visit ${nameOf(went.target)}.`
+          : `👣 ${nameOf(t)} stayed home all night.`);
+        recapResult(tr, went ? `visited ${nameOf(went.target)}` : 'stayed home');
+      }
+    });
+    alivePlayers().filter(p => p.role === 'coroner').forEach(co => {
+      const t = eff(co);
+      if (t && t !== 'skip') {
+        const body = getPlayer(t);
+        if (body && !body.alive && body.role) {
+          report(co, `🔬 The body of ${body.name}: they were the ${ROLES[body.role].icon} ${ROLES[body.role].name}.`);
+          recapResult(co, ROLES[body.role].name);
+        }
+      }
+    });
+
+    // 15. Mayor pledge.
+    let mayorName = null;
+    alivePlayers().filter(p => p.role === 'mayor' && !p.pledged).forEach(m => {
+      if (eff(m) === 'pledge') {
+        m.pledged = true;
+        mayorName = m.name;
+        addLog(`${m.name} went public: they are the Mayor! Their vote now counts double.`, true);
+      }
+    });
+
+    // Public log lines.
+    killed.forEach(k => {
+      const how = k.cause === 'vigilante' ? 'was shot' : k.cause === 'poison' ? 'succumbed to poison' : k.cause === 'guard' ? 'took a bullet meant for someone else' : 'was killed';
+      addLog(`${k.name} ${how} in the night.${k.role ? ` They were the ${ROLES[k.role].name}.` : ' Their body was unrecognisable.'}`, true);
+    });
+    if (woundedNames.length) addLog(`${woundedNames.join(' and ')} ${woundedNames.length > 1 ? 'were' : 'was'} wounded in the night, but survived!`, true);
+    let savedName = null;
+    if (saved) {
+      if (G.dayNum === 1) savedName = nameOf(savedId);
+      addLog(savedName ? `${savedName} was attacked, but the doctor saved them!` : 'The doctor saved someone from an attack in the night!', true);
+    }
+    if (revivedName) addLog(`⚰️ A miracle at dawn — ${revivedName} has risen from the dead!`, true);
+    if (!killed.length && !woundedNames.length && !saved && !revivedName) {
+      addLog(forced ? 'The night was ended early.' : 'The night passed quietly.');
+    }
+
+    // Bookkeeper tally (after everything settles).
+    alivePlayers().filter(p => p.role === 'bookkeeper').forEach(b => {
+      report(b, `📒 The ledger says: ${aliveMafia().length} of the mafia still breathing.`);
+    });
+
+    G.announce = {
+      kind: 'dawn',
+      killed: killed.map(k => ({ name: k.name, role: k.role, cause: k.cause })),
+      woundedNames,
+      savedName,
+      saved,
+      revivedName,
+      mayorName,
+    };
+
+    if (checkWin()) return;
+
+    G.phase = 'day';
+    G.votes = {};
+    setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
+    addLog(`Day ${G.dayNum} begins. The town votes.`);
+    broadcast();
+  }
+
+  /* ---------------- day / voting ---------------- */
+
+  function voteWeight(p) { return p.pledged ? 2 : 1; }
+
+  function handleVote(p, targetId) {
+    if (G.phase !== 'day' || !p.alive) return;
+    const valid = targetId === 'nobody' ||
+      (alivePlayers().some(t => t.id === targetId) && targetId !== p.id);
+    if (!valid) return;
+    G.votes[p.id] = targetId;
+    const pending = alivePlayers().filter(v => !(v.id in G.votes));
+    if (pending.length === 0) resolveVote();
+    broadcast();
+  }
+
+  function forceEndVoting() { resolveVote(true); }
+
+  function resolveVote(forced) {
+    if (G.phase !== 'day') return;
+
+    const tally = { nobody: 0 };
+    let castWeight = 0;
+    Object.entries(G.votes).forEach(([voterId, t]) => {
+      const w = voteWeight(getPlayer(voterId));
+      castWeight += w;
+      tally[t] = (tally[t] || 0) + w;
+    });
+    const max = Math.max(0, ...Object.values(tally));
+    const top = Object.keys(tally).filter(t => tally[t] === max && max > 0);
+
+    let eliminated = null;
+    let noMajority = false;
+    if (top.length === 1 && top[0] !== 'nobody') {
+      if (max > castWeight / 2) {
+        eliminated = getPlayer(top[0]);
+        eliminated.alive = false;
+        eliminated.causeOfDeath = 'vote';
+        addLog(`The village ganged up on ${eliminated.name} (${max}/${castWeight} votes) — they were the ${ROLES[eliminated.role].name}.`, true);
+      } else {
+        noMajority = true;
+        addLog('No majority was reached — no one was eliminated.');
+      }
+    } else if (top.length > 1) {
+      addLog('The vote was tied — no one was eliminated.');
+    } else {
+      addLog('The town chose to eliminate no one.');
+    }
+
+    // Executioners: settled or spoiled grudges.
+    if (eliminated) {
+      G.players.filter(x => x.role === 'executioner' && !x.achievedWin && !x.lostWin).forEach(ex => {
+        if (ex.execTargetId === eliminated.id) {
+          ex.achievedWin = true;
+          send(ex.id, { t: 'report', line: '🪓 Your grudge is settled — your target was voted out. You win when this game ends.' });
+        }
+      });
+    }
+
+    G.announce = {
+      kind: 'verdict',
+      eliminatedName: eliminated ? eliminated.name : null,
+      eliminatedRole: eliminated ? eliminated.role : null,
+      eliminatedId: eliminated ? eliminated.id : null,
+      tied: !eliminated && !noMajority && top.length > 1,
+      noMajority,
+      forced: !!forced,
+    };
+
+    G.phase = 'verdict';
+    G.lastWords = null;
+    setPhaseTimer(0);
+    broadcast();
+
+    if (eliminated && eliminated.isBot && !eliminated.forged) {
+      const line = teamOf(eliminated) === 'mafia'
+        ? rndOf(['You got me. Well played, town. 🔪', 'Fine, it was me. But the family is still out there… or are they?'])
+        : eliminated.role === 'jester'
+          ? rndOf(['HA! You absolute fools — this is EXACTLY what I wanted! 🃏', 'Thank you, thank you! You played right into my hands! 🃏'])
+          : rndOf(['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!', 'I told you it wasn’t me…']);
+      setTimeout(() => {
+        if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
+          G.lastWords = line;
+          addLog(`${eliminated.name}'s last words: “${line}”`);
+          broadcast();
+        }
+      }, 1500 + Math.random() * 1500);
+    }
+
+    setTimeout(() => {
+      if (!G || G.phase !== 'verdict') return;
+      if (G.announce.eliminatedRole === 'jester') {
+        G.phase = 'ended';
+        G.winner = 'jester';
+        setPhaseTimer(0);
+        addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
+        broadcast();
+        return;
+      }
+      if (checkWin()) return;
+      startNight();
+    }, eliminated ? 12000 : 5000);
+  }
+
+  /* One final message from a just-eliminated player, shown during the verdict.
+   * The Forger's mark destroys it. */
+  function handleLastWords(p, text) {
+    if (G.phase !== 'verdict' || G.lastWords) return;
+    if (!G.announce || G.announce.eliminatedId !== p.id) return;
+    text = String(text || '').trim().slice(0, 100);
+    if (!text) return;
+    if (p.forged) {
+      G.lastWords = '🔥 …the paper burns before anyone can read it. The last words are destroyed.';
+      addLog(`${p.name}'s last words were mysteriously destroyed.`);
+    } else {
+      G.lastWords = text;
+      addLog(`${p.name}'s last words: “${text}”`);
+    }
+    broadcast();
+  }
+
+  function checkWin() {
+    const mafia = aliveMafia().length;
+    const town = alivePlayers().length - mafia;
+    let winner = null;
+    if (mafia === 0) winner = 'town';
+    else if (mafia >= town) winner = 'mafia';
+    if (winner) {
+      G.phase = 'ended';
+      G.winner = winner;
+      setPhaseTimer(0);
+      addLog(winner === 'town'
+        ? 'All mafia have been eliminated — the town wins! 🎉'
+        : 'The mafia have taken over the town — the mafia win! 🔪', true);
+      extraWinners().forEach(w => addLog(`${w.name} also wins: ${w.why}`, true));
+      broadcast();
+      return true;
+    }
+    return false;
+  }
+
+  /* Neutral side-winners once the game has a main winner. */
+  function extraWinners() {
+    const out = [];
+    G.players.forEach(p => {
+      if (p.role === 'executioner' && p.achievedWin) out.push({ name: p.name, role: p.role, why: 'their grudge was settled 🪓' });
+      if (p.role === 'drifter' && p.alive) out.push({ name: p.name, role: p.role, why: 'they drifted through alive 🎒' });
+    });
+    return out;
+  }
+
+  function playAgain() {
+    const keep = G.players.filter(p => p.connected);
+    G = freshGame();
+    setPhaseTimer(0);
+    G.players = keep.map(p => ({
+      id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
+      avatar: p.avatar, isBot: p.isBot,
+    }));
+    addLog('New game — waiting for the host to start.');
+    broadcast();
+  }
+
+  function kickPlayer(id) {
+    if (G.phase !== 'lobby') return;
+    if (localConn && id === localConn._playerId) return;
+    const c = conns[id];
+    if (c) { try { c.send({ t: 'error', fatal: true, msg: 'You were removed from the lobby by the host.' }); c.close(); } catch (e) {} }
+    delete conns[id];
+    G.players = G.players.filter(p => p.id !== id);
+    broadcast();
+  }
+
+  /* ---------------- bot players ---------------- */
 
   const BOT_NAMES = ['Rita', 'Max', 'Ivy', 'Gus', 'Sal', 'Fay', 'Ned', 'Lou', 'Peg', 'Vic'];
 
@@ -137,6 +879,22 @@ const Host = (() => {
     if (bot) { bot.avatar = '🤖'; bot.isBot = true; broadcast(); }
   }
 
+  /* One pending timer per bot, delay chosen for the current phase; the wait
+   * restarts if the phase changes, so actions land in their intended window. */
+  function scheduleBot(conn) {
+    if (!G || conn._pending) return;
+    const phase = G.phase;
+    const p = getPlayer(conn._playerId);
+    const isPowerNight = phase === 'night' && p && nightUIFor(p) !== null;
+    const delay = isPowerNight ? 2000 + Math.random() * 3000 : 1000 + Math.random() * 2000;
+    conn._pending = setTimeout(() => {
+      conn._pending = null;
+      if (!G) return;
+      if (G.phase !== phase) { scheduleBot(conn); return; }
+      botAct(conn);
+    }, delay);
+  }
+
   const BOT_LINES = [
     'It wasn’t me, I promise!',
     'Hmm, {name} is being very quiet…',
@@ -152,27 +910,6 @@ const Host = (() => {
     'The mafia is definitely among us…',
   ];
 
-  const rndOf = a => a[Math.floor(Math.random() * a.length)];
-
-  /* One pending timer per bot. The delay is chosen for the CURRENT phase —
-   * power-role night actions take 2-5s, everything else 1-3s — and if the
-   * phase changes while waiting, the wait restarts, so a timer armed at the
-   * end of one phase can never rush an action at the start of the next. */
-  function scheduleBot(conn) {
-    if (!G || conn._pending) return;
-    const phase = G.phase;
-    const p = getPlayer(conn._playerId);
-    const isPowerNight = phase === 'night' && p && p.alive && ROLES[p.role] && ROLES[p.role].nightPrompt;
-    const delay = isPowerNight ? 2000 + Math.random() * 3000 : 1000 + Math.random() * 2000;
-    conn._pending = setTimeout(() => {
-      conn._pending = null;
-      if (!G) return;
-      if (G.phase !== phase) { scheduleBot(conn); return; }
-      botAct(conn);
-    }, delay);
-  }
-
-  /* Role-aware table talk: bots use what they actually know. */
   function botLine(p) {
     const others = alivePlayers().filter(t => t.id !== p.id);
     const r = Math.random();
@@ -198,8 +935,8 @@ const Host = (() => {
       }
     }
 
-    if (p.role === 'mafia') {
-      const town = others.filter(t => t.role !== 'mafia');
+    if (teamOf(p) === 'mafia') {
+      const town = others.filter(t => teamOf(t) !== 'mafia');
       if (town.length && r < 0.7) {
         const t = rndOf(town);
         return rndOf([
@@ -221,6 +958,17 @@ const Host = (() => {
       ]);
     }
 
+    if (p.role === 'executioner' && p.execTargetId && !p.lostWin && r < 0.6) {
+      const t = getPlayer(p.execTargetId);
+      if (t && t.alive) {
+        return rndOf([
+          `I've got a bad feeling about ${t.name}.`,
+          `${t.name} has been lying since day one. Vote them out.`,
+          `If we vote anyone today, it should be ${t.name}.`,
+        ]);
+      }
+    }
+
     if (p.role === 'doctor' && G.announce && G.announce.kind === 'dawn' &&
         (G.announce.saved || G.announce.savedName) && r < 0.4) {
       return rndOf([
@@ -239,480 +987,38 @@ const Host = (() => {
     if (!p || !p.alive) return;
     if (G.phase === 'reveal' && !G.confirms[p.id]) {
       handleConfirm(p);
-    } else if (G.phase === 'night' && ROLES[p.role].nightPrompt && !(p.id in G.night.actions)
-               && !(p.role === 'vigilante' && p.usedShot)) {
-      if (p.role === 'vigilante') {
-        // Bots mostly keep their one bullet unless they have little to lose.
-        if (Math.random() < 0.65) handleNightAction(p, 'skip');
-        else {
-          const ts = nightTargetsFor(p);
-          if (ts.length) handleNightAction(p, rndOf(ts).id);
-          else handleNightAction(p, 'skip');
-        }
-      } else {
-        const ts = nightTargetsFor(p);
-        if (ts.length) handleNightAction(p, ts[Math.floor(Math.random() * ts.length)].id);
-      }
+    } else if (G.phase === 'night' && !(p.id in G.night.actions)) {
+      const ui = nightUIFor(p);
+      if (!ui) return;
+      const opts = ui.targets.map(t => t.id);
+      if (ui.canSkip) { opts.push('skip'); if (p.role !== 'mafia' && p.role !== 'don') { opts.push('skip', 'skip'); } }
+      if (opts.length) handleNightAction(p, rndOf(opts));
     } else if (G.phase === 'day') {
-      // Talk first, vote on a later tick.
       if (conn._chatDay !== G.dayNum) {
         conn._chatDay = G.dayNum;
         handleChat(p, botLine(p));
         return;
       }
       if (!(p.id in G.votes)) {
-        // Vote with what the bot knows: detectives go after confirmed mafia,
-        // mafia push a townsperson, everyone else leans cautious.
         let target = null;
         if (p.role === 'detective' && p.intel) {
-          const m = p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && t.role === 'mafia');
+          const m = p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
           if (m.length) target = m[0].id;
-        } else if (p.role === 'mafia') {
-          const town = alivePlayers().filter(t => t.role !== 'mafia');
+        } else if (p.role === 'executioner' && p.execTargetId && !p.lostWin && !p.achievedWin) {
+          const t = getPlayer(p.execTargetId);
+          if (t && t.alive) target = t.id;
+        } else if (teamOf(p) === 'mafia') {
+          const town = alivePlayers().filter(t => teamOf(t) !== 'mafia');
           target = (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
         }
         if (!target) {
           const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
-          opts.push('nobody', 'nobody'); // lean toward sparing without evidence
+          opts.push('nobody', 'nobody');
           target = rndOf(opts);
         }
         handleVote(p, target);
       }
     }
-  }
-
-  function destroy() {
-    if (peer) { try { peer.destroy(); } catch (e) {} }
-    peer = null; G = null; conns = {}; localConn = null;
-  }
-
-  /* ---------------- messaging ---------------- */
-
-  function send(playerId, msg) {
-    const c = conns[playerId];
-    if (c && c.open) { try { c.send(msg); } catch (e) {} }
-  }
-
-  function handleDisconnect(conn) {
-    const p = G && G.players.find(pl => pl.id === conn._playerId);
-    if (p) {
-      if (conns[p.id] === conn) {
-        p.connected = false;
-        delete conns[p.id];
-      }
-      if (G.phase === 'lobby') {
-        // In the lobby a leaver is simply removed.
-        G.players = G.players.filter(pl => pl.id !== p.id);
-      }
-      broadcast();
-    }
-  }
-
-  function handleMessage(conn, msg) {
-    if (!msg || typeof msg !== 'object') return;
-    if (msg.t === 'join') return handleJoin(conn, msg);
-    const p = G.players.find(pl => pl.id === conn._playerId);
-    if (!p) return;
-    if (msg.t === 'night') return handleNightAction(p, msg.target);
-    if (msg.t === 'vote') return handleVote(p, msg.target);
-    if (msg.t === 'profile') return handleProfile(p, msg);
-    if (msg.t === 'confirm') return handleConfirm(p);
-    if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
-    if (msg.t === 'chat') return handleChat(p, msg.text);
-    if (msg.t === 'lastWords') return handleLastWords(p, msg.text);
-  }
-
-  /* Table talk: lobby (waiting banter) and day (discussion). Only living
-   * players may speak; everyone reads. */
-  function handleChat(p, text) {
-    if ((G.phase !== 'day' && G.phase !== 'lobby') || !p.alive) return;
-    text = String(text || '').trim().slice(0, 200);
-    if (!text) return;
-    G.chat.push({ name: p.name, avatar: p.avatar, text });
-    if (G.chat.length > 100) G.chat = G.chat.slice(-100);
-    broadcast();
-  }
-
-  /* Lobby-only: rename and avatar changes. */
-  function handleProfile(p, msg) {
-    if (G.phase !== 'lobby') return;
-    if (msg.avatar && AVATARS.includes(msg.avatar)) {
-      p.avatar = msg.avatar;
-    }
-    if (msg.name !== undefined) {
-      const name = String(msg.name || '').trim().slice(0, 16);
-      if (!name) {
-        send(p.id, { t: 'toast', msg: 'Names can’t be empty.' });
-      } else if (G.players.some(pl => pl.id !== p.id && pl.name.toLowerCase() === name.toLowerCase())) {
-        send(p.id, { t: 'toast', msg: 'That name is taken — pick another.' });
-      } else {
-        p.name = name;
-      }
-    }
-    broadcast();
-  }
-
-  function handleJoin(conn, msg) {
-    const name = String(msg.name || '').trim().slice(0, 16);
-    if (!name) { conn.send({ t: 'error', fatal: true, msg: 'Please enter a name.' }); return; }
-
-    // Reconnect: known playerId, or (after start) same name on a vacated seat.
-    let p = msg.playerId ? G.players.find(pl => pl.id === msg.playerId) : null;
-    if (!p && G.phase !== 'lobby') {
-      p = G.players.find(pl => !pl.connected && pl.name.toLowerCase() === name.toLowerCase());
-    }
-
-    if (p) {
-      if (p.connected && conns[p.id] && conns[p.id].open && conns[p.id] !== conn) {
-        conn.send({ t: 'error', fatal: true, msg: 'That player is already connected on another device.' });
-        return;
-      }
-    } else {
-      if (G.players.some(pl => pl.name.toLowerCase() === name.toLowerCase())) {
-        conn.send({ t: 'error', fatal: true, msg: 'That name is taken — pick another.' });
-        return;
-      }
-      const midGame = G.phase !== 'lobby';
-      p = {
-        id: 'p' + Math.random().toString(36).slice(2, 10),
-        name, role: null, alive: !midGame, connected: true, causeOfDeath: null,
-        avatar: AVATARS[G.players.length % AVATARS.length],
-        spectator: midGame, // late joiners watch this game and play the next
-      };
-      G.players.push(p);
-      if (midGame) addLog(`${name} joined as a spectator.`);
-    }
-
-    p.connected = true;
-    conn._playerId = p.id;
-    conns[p.id] = conn;
-    conn.send({ t: 'joined', playerId: p.id, roomCode });
-    broadcast();
-  }
-
-  /* ---------------- game flow ---------------- */
-
-  function startGame() {
-    const connected = G.players.filter(p => p.connected);
-    if (connected.length < MIN_PLAYERS) return;
-    // Drop anyone who left the lobby before start.
-    G.players = connected;
-    const deck = buildRoleDeck(G.players.length, deckOpts());
-    G.players.forEach((p, i) => { p.role = deck[i]; p.alive = true; p.usedShot = false; p.actions = []; p.intel = []; });
-    addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, deckOpts())}).`, true);
-    G.phase = 'reveal';
-    G.confirms = {};
-    setPhaseTimer(0);
-    broadcast();
-  }
-
-  /* True when p is the only human in the game — a solo test against bots. */
-  function soloHuman(p) {
-    return !p.isBot && G.players.every(pl => pl.id === p.id || pl.isBot);
-  }
-
-  /* Solo tests only: swap roles with a bot so the human can try any role. */
-  function handlePickRole(p, roleId) {
-    if (G.phase !== 'reveal' || G.confirms[p.id] || !soloHuman(p)) return;
-    if (!ROLES[roleId] || p.role === roleId) return;
-    const other = G.players.find(pl => pl.id !== p.id && pl.role === roleId);
-    if (!other) return;
-    other.role = p.role;
-    p.role = roleId;
-    broadcast();
-  }
-
-  function handleConfirm(p) {
-    if (G.phase !== 'reveal' || G.confirms[p.id]) return;
-    G.confirms[p.id] = true;
-    if (G.players.filter(pl => !pl.spectator).every(pl => G.confirms[pl.id])) startNight();
-    else broadcast();
-  }
-
-  function startNight() {
-    G.dayNum += 1;
-    G.phase = 'night';
-    G.night = { actions: {} };
-    G.votes = null;
-    G.chat = [];
-    setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
-    addLog(`Night ${G.dayNum} falls. The town sleeps.`);
-    broadcast();
-  }
-
-  function nightActors() {
-    return alivePlayers().filter(p =>
-      ROLES[p.role].nightPrompt && !(p.role === 'vigilante' && p.usedShot));
-  }
-
-  function handleNightAction(p, targetId) {
-    if (G.phase !== 'night' || !p.alive || !ROLES[p.role].nightPrompt) return;
-    if (p.role === 'vigilante' && p.usedShot) return;
-    const skip = p.role === 'vigilante' && targetId === 'skip';
-    if (!skip) {
-      const validTargets = nightTargetsFor(p).map(t => t.id);
-      if (!validTargets.includes(targetId)) return;
-    }
-    G.night.actions[p.id] = targetId;
-
-    // Personal recap for the end-of-game screen.
-    (p.actions = p.actions || []).push({
-      night: G.dayNum, role: p.role,
-      target: skip ? null : nameOf(targetId), skip,
-      result: null,
-    });
-
-    // A detective learns the result as soon as they investigate.
-    // (Kept out of the game log — the host is a player and must not see it.)
-    if (p.role === 'detective') {
-      const target = getPlayer(targetId);
-      const isMafia = target.role === 'mafia';
-      p.actions[p.actions.length - 1].result = isMafia ? 'mafia' : 'not mafia';
-      if (p.isBot) (p.intel = p.intel || []).push({ targetId, isMafia });
-      send(p.id, { t: 'investigation', name: target.name, isMafia });
-    }
-
-    maybeResolveNight();
-    broadcast();
-  }
-
-  function nightTargetsFor(p) {
-    if (p.role === 'mafia') return alivePlayers().filter(t => t.role !== 'mafia');
-    if (p.role === 'doctor') return alivePlayers().filter(t => !settings.noSelfHeal || t.id !== p.id);
-    if (p.role === 'detective') return alivePlayers().filter(t => t.id !== p.id);
-    if (p.role === 'vigilante' && !p.usedShot) return alivePlayers().filter(t => t.id !== p.id);
-    return [];
-  }
-
-  function maybeResolveNight() {
-    const pending = nightActors().filter(p => !(p.id in G.night.actions));
-    if (pending.length === 0) resolveNight();
-  }
-
-  function forceEndNight() {
-    // Missing actors simply take no action tonight.
-    resolveNight(true);
-  }
-
-  function resolveNight(forced) {
-    if (G.phase !== 'night') return;
-
-    // Mafia kill: plurality of mafia picks; tie broken at random.
-    const mafiaPicks = aliveMafia()
-      .map(m => G.night.actions[m.id])
-      .filter(Boolean);
-    let killTarget = null;
-    if (mafiaPicks.length) {
-      const tally = {};
-      mafiaPicks.forEach(t => { tally[t] = (tally[t] || 0) + 1; });
-      const max = Math.max(...Object.values(tally));
-      const top = Object.keys(tally).filter(t => tally[t] === max);
-      killTarget = top[Math.floor(Math.random() * top.length)];
-    }
-
-    const doctor = alivePlayers().find(p => p.role === 'doctor');
-    const savedId = doctor ? G.night.actions[doctor.id] : null;
-
-    // Vigilante shots (one bullet per game, spent only when fired).
-    const shots = [];
-    alivePlayers().filter(p => p.role === 'vigilante').forEach(v => {
-      const t = G.night.actions[v.id];
-      if (t && t !== 'skip') { v.usedShot = true; shots.push(t); }
-    });
-
-    const deaths = new Map(); // targetId -> cause
-    let saved = false;
-    let savedName = null;
-    if (killTarget) {
-      if (killTarget === savedId) saved = true;
-      else deaths.set(killTarget, 'mafia');
-    }
-    shots.forEach(t => {
-      if (t === savedId) saved = true;
-      else if (!deaths.has(t)) deaths.set(t, 'vigilante');
-    });
-
-    const killed = [];
-    const woundedNames = [];
-    if (deaths.size && G.dayNum === 1 && settings.safeFirstNight) {
-      deaths.forEach((cause, id) => woundedNames.push(nameOf(id)));
-      addLog(`${woundedNames.join(' and ')} ${woundedNames.length > 1 ? 'were' : 'was'} wounded in the night, but survived!`, true);
-    } else {
-      deaths.forEach((cause, id) => {
-        const victim = getPlayer(id);
-        victim.alive = false;
-        victim.causeOfDeath = cause;
-        killed.push({ name: victim.name, role: victim.role, cause });
-        addLog(`${victim.name} was ${cause === 'vigilante' ? 'shot' : 'killed'} in the night. They were the ${ROLES[victim.role].name}.`, true);
-      });
-    }
-    if (saved) {
-      // Only the first night reveals WHO the doctor saved.
-      if (G.dayNum === 1) savedName = nameOf(savedId);
-      addLog(savedName ? `${savedName} was attacked, but the doctor saved them!` : 'The doctor saved someone from an attack in the night!', true);
-    }
-    if (!killTarget && !shots.length) {
-      addLog(forced ? 'The night was ended early — no one was attacked.' : 'The night passed quietly.');
-    }
-
-    G.announce = {
-      kind: 'dawn',
-      killed,
-      woundedNames,
-      savedName,
-      saved,
-    };
-
-    if (checkWin()) return;
-
-    G.phase = 'day';
-    G.votes = {};
-    setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
-    addLog(`Day ${G.dayNum} begins. The town votes.`);
-    broadcast();
-  }
-
-  function handleVote(p, targetId) {
-    if (G.phase !== 'day' || !p.alive) return;
-    const valid = targetId === 'nobody' ||
-      (alivePlayers().some(t => t.id === targetId) && targetId !== p.id);
-    if (!valid) return;
-    G.votes[p.id] = targetId;
-    const pending = alivePlayers().filter(v => !(v.id in G.votes));
-    if (pending.length === 0) resolveVote();
-    broadcast();
-  }
-
-  function forceEndVoting() { resolveVote(true); }
-
-  function resolveVote(forced) {
-    if (G.phase !== 'day') return;
-
-    const cast = Object.values(G.votes);
-    const tally = { nobody: 0 };
-    cast.forEach(t => { tally[t] = (tally[t] || 0) + 1; });
-    const max = Math.max(0, ...Object.values(tally));
-    const top = Object.keys(tally).filter(t => tally[t] === max && max > 0);
-
-    // Elimination needs a strict majority of the votes cast, not a plurality.
-    let eliminated = null;
-    let noMajority = false;
-    if (top.length === 1 && top[0] !== 'nobody') {
-      if (max > cast.length / 2) {
-        eliminated = getPlayer(top[0]);
-        eliminated.alive = false;
-        eliminated.causeOfDeath = 'vote';
-        addLog(`The village ganged up on ${eliminated.name} (${max}/${cast.length} votes) — they were the ${ROLES[eliminated.role].name}.`, true);
-      } else {
-        noMajority = true;
-        addLog('No majority was reached — no one was eliminated.');
-      }
-    } else if (top.length > 1) {
-      addLog('The vote was tied — no one was eliminated.');
-    } else {
-      addLog('The town chose to eliminate no one.');
-    }
-
-    G.announce = {
-      kind: 'verdict',
-      eliminatedName: eliminated ? eliminated.name : null,
-      eliminatedRole: eliminated ? eliminated.role : null,
-      eliminatedId: eliminated ? eliminated.id : null,
-      tied: !eliminated && !noMajority && top.length > 1,
-      noMajority,
-      forced: !!forced,
-    };
-
-    // Show the verdict to everyone before moving on — longer when someone
-    // was eliminated, so they can leave last words.
-    G.phase = 'verdict';
-    G.lastWords = null;
-    setPhaseTimer(0);
-    broadcast();
-
-    // A bot's last words arrive after a beat.
-    if (eliminated && eliminated.isBot) {
-      const line = eliminated.role === 'mafia'
-        ? rndOf(['You got me. Well played, town. 🔪', 'Fine, it was me. But my partner is still out there… or are they?'])
-        : eliminated.role === 'jester'
-          ? rndOf(['HA! You absolute fools — this is EXACTLY what I wanted! 🃏', 'Thank you, thank you! You played right into my hands! 🃏'])
-          : rndOf(['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!', 'I told you it wasn’t me…']);
-      setTimeout(() => {
-        if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
-          G.lastWords = line;
-          addLog(`${eliminated.name}'s last words: “${line}”`);
-          broadcast();
-        }
-      }, 1500 + Math.random() * 1500);
-    }
-
-    setTimeout(() => {
-      if (!G || G.phase !== 'verdict') return;
-      // The Jester wins alone by getting voted out.
-      if (G.announce.eliminatedRole === 'jester') {
-        G.phase = 'ended';
-        G.winner = 'jester';
-        setPhaseTimer(0);
-        addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
-        broadcast();
-        return;
-      }
-      if (checkWin()) return;
-      startNight();
-    }, eliminated ? 12000 : 5000);
-  }
-
-  /* One final message from a just-eliminated player, shown during the verdict. */
-  function handleLastWords(p, text) {
-    if (G.phase !== 'verdict' || G.lastWords) return;
-    if (!G.announce || G.announce.eliminatedId !== p.id) return;
-    text = String(text || '').trim().slice(0, 100);
-    if (!text) return;
-    G.lastWords = text;
-    addLog(`${p.name}'s last words: “${text}”`);
-    broadcast();
-  }
-
-  function checkWin() {
-    const mafia = aliveMafia().length;
-    const town = alivePlayers().length - mafia;
-    let winner = null;
-    if (mafia === 0) winner = 'town';
-    else if (mafia >= town) winner = 'mafia';
-    if (winner) {
-      G.phase = 'ended';
-      G.winner = winner;
-      setPhaseTimer(0);
-      addLog(winner === 'town'
-        ? 'All mafia have been eliminated — the town wins! 🎉'
-        : 'The mafia have taken over the town — the mafia win! 🔪', true);
-      broadcast();
-      return true;
-    }
-    return false;
-  }
-
-  function playAgain() {
-    const keep = G.players.filter(p => p.connected);
-    G = freshGame();
-    setPhaseTimer(0);
-    // Spectators are dealt in for the next game.
-    G.players = keep.map(p => ({
-      id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
-      avatar: p.avatar, isBot: p.isBot,
-    }));
-    addLog('New game — waiting for the host to start.');
-    broadcast();
-  }
-
-  function kickPlayer(id) {
-    if (G.phase !== 'lobby') return;
-    if (localConn && id === localConn._playerId) return; // the host can't kick themself
-    const c = conns[id];
-    if (c) { try { c.send({ t: 'error', fatal: true, msg: 'You were removed from the lobby by the host.' }); c.close(); } catch (e) {} }
-    delete conns[id];
-    G.players = G.players.filter(p => p.id !== id);
-    broadcast();
   }
 
   /* ---------------- per-player state views ---------------- */
@@ -724,10 +1030,29 @@ const Host = (() => {
 
   function roleVisibleTo(viewer, target) {
     if (G.phase === 'ended') return true;
-    if (!target.alive) return true;
     if (viewer && viewer.id === target.id) return true;
-    if (viewer && viewer.role === 'mafia' && target.role === 'mafia' && G.phase !== 'lobby') return true;
+    if (target.cleaned) return false; // the Cleaner scrubbed this body
+    if (!target.alive) return true;
+    if (target.pledged) return true;  // the Mayor went public
+    if (viewer && teamOf(viewer) === 'mafia' && teamOf(target) === 'mafia' && G.phase !== 'lobby') return true;
     return false;
+  }
+
+  /* Extra facts a player sees on their own role card. */
+  function roleInfoFor(p) {
+    const info = [];
+    if (p.recruited) info.push('🤝 You have been recruited — you now win with the mafia.');
+    if (p.role === 'vigilante') info.push(p.guilt ? 'Your guilt has holstered your gun for good.' : `Bullets left: ${p.bullets} (usable from Night 2).`);
+    if (p.role === 'executioner' && p.execTargetId) {
+      info.push(`Your target: ${nameOf(p.execTargetId)}${p.achievedWin ? ' — grudge settled, you win! 🪓' : p.lostWin ? ' — died the wrong way. You lose.' : ''}`);
+    }
+    if (p.role === 'mayor' && p.pledged) info.push('You are public — your vote counts double.');
+    if (p.role === 'forger') info.push(`Forgeries left: ${p.forgerUses}.`);
+    if (p.role === 'cleaner') info.push(`Cleans left: ${p.cleanerUses}.`);
+    if (p.role === 'drifter') info.push(`Lie-low nights left: ${p.drifterUses}.`);
+    if (p.role === 'mortician') info.push(p.usedRaise ? 'Your power is spent.' : 'One revival available.');
+    if (p.role === 'recruiter') info.push(p.recruiterUsed ? 'Your offer has been made.' : 'One offer available, from Night 2.');
+    return info;
   }
 
   function viewFor(p) {
@@ -741,18 +1066,20 @@ const Host = (() => {
       roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, deckOpts()) : null,
       settings: {
         safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
-        noSelfHeal: settings.noSelfHeal, vigilante: settings.vigilante, jester: settings.jester,
-        nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+        noSelfHeal: settings.noSelfHeal, nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+        extraRoles: Object.keys(settings.roles).filter(r => settings.roles[r]),
       },
       timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
       you: {
         id: p.id, name: p.name, alive: p.alive, avatar: p.avatar, spectator: !!p.spectator,
         role: G.phase === 'lobby' ? null : p.role,
+        info: G.phase === 'lobby' ? [] : roleInfoFor(p),
       },
       players: G.players.map(t => ({
         id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
         spectator: !!t.spectator,
-        role: roleVisibleTo(p, t) && G.phase !== 'lobby' ? t.role : null,
+        pledged: !!t.pledged,
+        role: roleVisibleTo(p, t) && G.phase !== 'lobby' && t.role ? t.role : null,
         causeOfDeath: t.alive ? null : t.causeOfDeath,
       })),
     };
@@ -762,22 +1089,27 @@ const Host = (() => {
         confirmed: !!G.confirms[p.id],
         waitingOn: G.players.filter(pl => !pl.spectator && !G.confirms[pl.id]).length,
         canPickRole: soloHuman(p),
+        pickableRoles: soloHuman(p) ? [...new Set(G.players.map(x => x.role))] : null,
       };
     }
 
     if (G.phase === 'night' && p.alive) {
-      const prompt = (p.role === 'vigilante' && p.usedShot) ? null : ROLES[p.role].nightPrompt;
+      const ui = nightUIFor(p);
+      const actionVal = G.night.actions[p.id];
       view.night = {
         acted: p.id in G.night.actions,
-        actionTarget: G.night.actions[p.id] && G.night.actions[p.id] !== 'skip' ? nameOf(G.night.actions[p.id]) : null,
-        heldFire: G.night.actions[p.id] === 'skip',
-        canSkip: p.role === 'vigilante' && !p.usedShot,
-        prompt,
-        targets: prompt ? nightTargetsFor(p).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })) : [],
-        mates: p.role === 'mafia'
+        actionTarget: actionVal && actionVal !== 'skip' && !['pledge', 'hide', 'clean'].includes(actionVal) ? nameOf(actionVal) : null,
+        actionSpecial: ['pledge', 'hide', 'clean'].includes(actionVal) ? actionVal : null,
+        heldFire: actionVal === 'skip',
+        prompt: ui ? ui.prompt : null,
+        targets: ui ? ui.targets : [],
+        canSkip: !!(ui && ui.canSkip),
+        skipLabel: ui && ui.skipLabel ? ui.skipLabel : '🕊 Skip',
+        mates: teamOf(p) === 'mafia'
           ? aliveMafia().filter(m => m.id !== p.id).map(m => ({
-              name: m.name, avatar: m.avatar,
-              pick: G.night.actions[m.id] ? nameOf(G.night.actions[m.id]) : null,
+              name: m.name, avatar: m.avatar, role: ROLES[m.role].name,
+              pick: G.night.actions[m.id] && G.night.actions[m.id] !== 'skip' && !['pledge', 'hide', 'clean'].includes(G.night.actions[m.id])
+                ? nameOf(G.night.actions[m.id]) : null,
             }))
           : null,
         waitingOn: nightActors().filter(a => !(a.id in G.night.actions)).length,
@@ -793,17 +1125,18 @@ const Host = (() => {
       const counts = {};
       const voters = {};
       Object.entries(G.votes).forEach(([voterId, t]) => {
-        counts[t] = (counts[t] || 0) + 1;
         const v = getPlayer(voterId);
+        counts[t] = (counts[t] || 0) + voteWeight(v);
         (voters[t] = voters[t] || []).push(v.name);
       });
+      const aliveWeight = alivePlayers().reduce((s, x) => s + voteWeight(x), 0);
       view.vote = {
         yourVote: G.votes[p.id] || null,
         counts,
         voters: settings.showVoters ? voters : null,
         voted: Object.keys(G.votes).length,
         needed: alivePlayers().length,
-        majority: Math.floor(alivePlayers().length / 2) + 1,
+        majority: Math.floor(aliveWeight / 2) + 1,
         targets: alivePlayers().filter(t => t.id !== p.id).map(t => ({ id: t.id, name: t.name, avatar: t.avatar })),
       };
       view.chat = G.chat.slice(-50);
@@ -822,14 +1155,13 @@ const Host = (() => {
         timeline: G.log.filter(e => e.important).map(e => e.text),
         yours: (p.actions || []).slice(),
       };
+      view.extraWinners = extraWinners();
     }
 
     return view;
   }
 
-  /* ---------------- host controls UI ----------------
-   * The host plays through the Player view above these controls, so this
-   * panel shows only public information: counts, the code, and buttons. */
+  /* ---------------- host controls UI ---------------- */
 
   const el = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -846,10 +1178,17 @@ const Host = (() => {
     }</div></div>`;
   }
 
+  const ROLE_GROUPS = [
+    { title: '🏘 Village', roles: ['bodyguard', 'vigilante', 'watcher', 'tracker', 'coroner', 'bookkeeper', 'mayor', 'mortician'] },
+    { title: '🔪 Mafia', roles: ['don', 'fixer', 'framer', 'poisoner', 'consigliere', 'forger', 'cleaner', 'recruiter'] },
+    { title: '🎭 Neutral', roles: ['jester', 'executioner', 'drifter'] },
+  ];
+
   function render() {
     if (!G) return;
     const c = el('host-controls-area');
     if (!c) return;
+
     let html = '';
 
     if (G.phase === 'lobby') {
@@ -889,10 +1228,6 @@ const Host = (() => {
             Show who voted for who (unticked = secret ballot)</label>
           <label class="opt"><input type="checkbox" id="opt-no-self-heal" ${settings.noSelfHeal ? 'checked' : ''}>
             Doctor can't protect themselves</label>
-          <label class="opt"><input type="checkbox" id="opt-vigilante" ${settings.vigilante ? 'checked' : ''}>
-            🔫 Include the Vigilante (town, one bullet per game)</label>
-          <label class="opt"><input type="checkbox" id="opt-jester" ${settings.jester ? 'checked' : ''}>
-            🃏 Include the Jester (wins alone if voted out)</label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -901,11 +1236,21 @@ const Host = (() => {
             <select id="opt-day-timer">${[[0, 'No limit'], [120, '2 min'], [180, '3 min'], [300, '5 min'], [600, '10 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.dayTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select></label>
+        </div>
+        <div class="card"><h3>Extra roles</h3>
+          <p class="hint" style="margin:4px 0 8px">Enabled roles join the deck when there are enough players (Villager seats are used first).
+          ⚠️ Every mafia support role grows the mafia team — enable a similar number of village roles to keep the game fair.</p>
+          ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:8px 0 2px">${g.title}</p>` +
+            g.roles.map(r => `
+              <label class="opt"><input type="checkbox" data-role-opt="${r}" ${settings.roles[r] ? 'checked' : ''}>
+                <span>${ROLES[r].icon} <strong>${ROLES[r].name}</strong>
+                <span class="muted small-text" title="${esc(ROLES[r].desc)}"> — ${esc(ROLES[r].desc.length > 90 ? ROLES[r].desc.slice(0, 90) + '…' : ROLES[r].desc)}</span></span></label>`).join('')
+          ).join('')}
         </div>`;
     }
 
     if (G.phase === 'reveal') {
-      const pending = G.players.filter(p => !G.confirms[p.id]).length;
+      const pending = G.players.filter(p => !p.spectator && !G.confirms[p.id]).length;
       html += `
         <div class="card">
           <h3>Host controls</h3>
@@ -968,14 +1313,13 @@ const Host = (() => {
     if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
     const osh = el('opt-no-self-heal');
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
-    const ovg = el('opt-vigilante');
-    if (ovg) ovg.onchange = () => { settings.vigilante = ovg.checked; broadcast(); };
-    const oj = el('opt-jester');
-    if (oj) oj.onchange = () => { settings.jester = oj.checked; broadcast(); };
     const ont = el('opt-night-timer');
     if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
     const odt = el('opt-day-timer');
     if (odt) odt.onchange = () => { settings.dayTimer = parseInt(odt.value, 10) || 0; broadcast(); };
+    c.querySelectorAll('[data-role-opt]').forEach(cb => {
+      cb.onchange = () => { settings.roles[cb.dataset.roleOpt] = cb.checked; broadcast(); };
+    });
   }
 
   return { create, destroy, PEER_PREFIX };

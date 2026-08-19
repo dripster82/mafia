@@ -8,7 +8,7 @@ const Player = (() => {
   let myName = null;
   let roomCode = null;
   let roleRevealed = false;
-  let investigations = []; // {name, isMafia}
+  let intel = []; // private dawn reports (investigations, sightings, ledger…)
   let connected = false;
   let reconnectTimer = null;
   let connectTimer = null;
@@ -106,7 +106,7 @@ const Player = (() => {
     myName = name;
     view = null;
     roleRevealed = false;
-    investigations = [];
+    intel = [];
     connected = true;
     conn = { open: true, send: sendToHost };
   }
@@ -120,7 +120,7 @@ const Player = (() => {
     roomCode = code.toUpperCase();
     myName = name;
     roleRevealed = false;
-    investigations = [];
+    intel = [];
     dlog = [];
     dbg(`join requested: room=${roomCode} name=${name}`);
     dbg(`online=${navigator.onLine} secure=${location.protocol === 'https:'}`);
@@ -266,7 +266,7 @@ const Player = (() => {
       }
       if (msg.view.phase === 'lobby' && (!view || view.phase !== 'lobby')) {
         // A new game is forming — clear leftovers from the previous one.
-        investigations = [];
+        intel = [];
         roleRevealed = false;
       }
       const prevPhase = view ? view.phase : null;
@@ -284,8 +284,9 @@ const Player = (() => {
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => { toastMsg = null; render(); }, 4000);
       render();
-    } else if (msg.t === 'investigation') {
-      investigations.push(msg);
+    } else if (msg.t === 'report') {
+      intel.push(msg.line);
+      if (intel.length > 40) intel.shift();
       render();
     } else if (msg.t === 'error') {
       if (msg.fatal) fatal(msg.msg);
@@ -335,11 +336,13 @@ const Player = (() => {
         <div class="role-desc">Tap to reveal — make sure no one is looking!</div>
       </div>`;
     }
+    const info = (view && view.you.info) || [];
     return `<div id="role-card" class="role-card team-${r.team}">
       <div class="role-icon">${r.icon}</div>
       <div class="role-name">${r.name}</div>
       <div class="role-team ${r.team}">${r.team === 'mafia' ? 'Team Mafia' : r.team === 'jester' ? 'Neutral — wins alone' : 'Team Town'}</div>
       <div class="role-desc">${r.desc}</div>
+      ${info.map(i => `<div class="role-desc" style="margin-top:6px"><strong>${esc(i)}</strong></div>`).join('')}
       ${concealable ? '<div class="hint">Tap to hide</div>' : ''}
     </div>`;
   }
@@ -350,12 +353,14 @@ const Player = (() => {
       view.players.map(p => {
         const role = p.role ? `<span class="role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>` : '';
         const votes = withVotes && counts[p.id] ? `<span class="vote-count">${counts[p.id]} 🗳</span>` : '';
+        const deadLabel = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding' };
         const dead = !p.alive
-          ? `<span class="status">${p.spectator ? '👁 spectating' : p.causeOfDeath === 'vote' ? 'voted out' : p.causeOfDeath === 'vigilante' ? 'shot' : 'killed'}</span>` : '';
+          ? `<span class="status">${p.spectator ? '👁 spectating' : deadLabel[p.causeOfDeath] || 'killed'}</span>` : '';
+        const mayorBadge = p.pledged && p.alive ? '<span class="status">🎖 Mayor</span>' : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
           <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
-          ${role}${votes}${dead}</div>`;
+          ${mayorBadge}${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
   }
@@ -396,17 +401,23 @@ const Player = (() => {
     if (!a) return '';
     if (view.phase === 'day' && a.kind === 'dawn') {
       const parts = [];
-      (a.killed || []).forEach(k => parts.push(
-        `<strong>${esc(k.name)}</strong> was ${k.cause === 'vigilante' ? 'shot' : 'killed'} in the night —
-         they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`));
+      (a.killed || []).forEach(k => {
+        const how = k.cause === 'vigilante' ? 'was shot' : k.cause === 'poison' ? 'succumbed to poison'
+          : k.cause === 'guard' ? 'took a bullet meant for someone else' : 'was killed';
+        parts.push(`<strong>${esc(k.name)}</strong> ${how} in the night — ${
+          k.role ? `they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`
+                 : 'their body was left unrecognisable. 🧹'}`);
+      });
       if (a.woundedNames && a.woundedNames.length) parts.push(
         `<strong>${a.woundedNames.map(esc).join(' and ')}</strong> ${a.woundedNames.length > 1 ? 'were' : 'was'} wounded in the night — but survived!`);
       if (a.savedName) parts.push(`<strong>${esc(a.savedName)}</strong> was attacked, but the doctor saved them!`);
       else if (a.saved) parts.push('The doctor saved someone from an attack in the night!');
+      if (a.revivedName) parts.push(`⚰️ A miracle — <strong>${esc(a.revivedName)}</strong> has risen from the dead!`);
+      if (a.mayorName) parts.push(`📣 <strong>${esc(a.mayorName)}</strong> is the Mayor — proven village, and their vote now counts double.`);
       if (!parts.length) parts.push('No one died in the night.');
       const grim = (a.killed && a.killed.length) || (a.woundedNames && a.woundedNames.length);
       return `<div class="banner ${grim ? 'death' : 'day'}">
-        <span class="big-emoji">${a.killed && a.killed.length ? '💀' : a.woundedNames && a.woundedNames.length ? '🩹' : a.saved ? '💉' : '🌤'}</span>
+        <span class="big-emoji">${a.killed && a.killed.length ? '💀' : a.woundedNames && a.woundedNames.length ? '🩹' : a.saved ? '💉' : a.revivedName ? '⚰️' : '🌤'}</span>
         <p>${parts.join('</p><p>')}</p></div>`;
     }
     if (view.phase === 'night' && a.kind === 'verdict' && view.dayNum > 1) {
@@ -421,10 +432,10 @@ const Player = (() => {
     return '';
   }
 
-  function investigationsHTML() {
-    if (!investigations.length || !view.you.alive || view.you.role !== 'detective') return '';
-    return `<div class="card"><h3>🔍 Your investigations</h3><div class="log">${
-      investigations.map(i => `<div class="entry ${i.isMafia ? 'important' : ''}">${esc(i.name)} is ${i.isMafia ? 'MAFIA 🔪' : 'not mafia ✅'}</div>`).join('')
+  function intelHTML() {
+    if (!intel.length || !view.you.alive) return '';
+    return `<div class="card"><h3>🕵️ Your intel</h3><div class="log">${
+      intel.map(line => `<div class="entry ${/MAFIA/.test(line) ? 'important' : ''}">${esc(line)}</div>`).join('')
     }</div></div>`;
   }
 
@@ -518,7 +529,7 @@ const Player = (() => {
       if (!view.reveal.confirmed && view.reveal.canPickRole) {
         html += `<div class="card"><h3>🧪 Solo test — choose your role</h3>
           <p class="muted small-text" style="margin-bottom:10px">Everyone else is a bot, so you can pick the role you want to try.</p>
-          <div class="row-actions">${Object.keys(ROLES).map(r =>
+          <div class="row-actions">${(view.reveal.pickableRoles || Object.keys(ROLES)).map(r =>
             `<button class="btn ${view.you.role === r ? 'selected' : ''}" data-pick-role="${r}">${ROLES[r].icon} ${ROLES[r].name}</button>`).join('')}
           </div></div>`;
       }
@@ -539,22 +550,27 @@ const Player = (() => {
 
       const n = view.night;
       if (n.mates && n.mates.length) {
-        html += `<div class="card"><h3>🔪 Your fellow mafia</h3>${
-          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)} — ${
+        html += `<div class="card"><h3>🔪 Your family</h3>${
+          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)} <span class="muted">(${esc(m.role)})</span> — ${
             m.pick ? `targeting <strong>${esc(m.pick)}</strong>` : '<span class="muted">deciding…</span>'}</p>`).join('')
-        }<p class="hint">Agree on one target — a split vote picks randomly among the top choices.</p></div>`;
+        }<p class="hint">Killers should agree on one target — a split vote picks randomly among the top choices.</p></div>`;
       }
-      html += investigationsHTML();
+      html += intelHTML();
 
       if (!n.prompt) {
         html += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p></div>`;
       } else if (n.acted) {
-        html += `<div class="card center"><p>${n.heldFire ? '🕊 You held your fire.' : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`}</p>
+        const actedMsg = n.actionSpecial === 'pledge' ? '📣 You will go public at dawn.'
+          : n.actionSpecial === 'hide' ? '🎒 You are lying low tonight.'
+          : n.actionSpecial === 'clean' ? '🧹 You will clean tonight’s kill.'
+          : n.heldFire ? '🕊 You chose to sit tonight out.'
+          : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`;
+        html += `<div class="card center"><p>${actedMsg}</p>
           <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p></div>`;
       } else {
         html += `<div class="card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
           n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
-        }${n.canSkip ? '<button class="btn ghost" data-night="skip">🕊 Hold your fire (keep your bullet)</button>' : ''}</div></div>`;
+        }${n.canSkip ? `<button class="btn ghost" data-night="skip">${esc(n.skipLabel)}</button>` : ''}</div></div>`;
       }
     }
 
@@ -564,7 +580,7 @@ const Player = (() => {
         ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
       html += announceHTML();
       html += roleCardHTML(view.you.role, true);
-      html += investigationsHTML();
+      html += intelHTML();
 
       const v = view.vote;
       html += `<div class="card">
@@ -611,12 +627,25 @@ const Player = (() => {
              You were the <strong>${ROLES[view.you.role].icon} ${ROLES[view.you.role].name}</strong>.`}</p>
         <p class="muted small-text">If the host starts a new game, you'll join it automatically.</p></div>`;
 
+      if (view.extraWinners && view.extraWinners.length) {
+        html += `<div class="card"><h3>🏅 Side winners</h3>${
+          view.extraWinners.map(w => `<p class="small-text">${ROLES[w.role].icon} <strong>${esc(w.name)}</strong> — ${esc(w.why)}</p>`).join('')
+        }</div>`;
+      }
       if (view.recap) {
         if (view.recap.yours && view.recap.yours.length) {
-          const verbs = { mafia: 'targeted', doctor: 'protected', detective: 'investigated', vigilante: 'shot at' };
+          const verbs = {
+            mafia: 'targeted', don: 'targeted', doctor: 'protected', detective: 'investigated',
+            vigilante: 'shot at', watcher: 'watched', tracker: 'followed', coroner: 'examined',
+            bodyguard: 'guarded', fixer: 'blocked', framer: 'framed', poisoner: 'poisoned',
+            consigliere: 'studied', forger: 'marked', recruiter: 'approached', mortician: 'raised',
+          };
+          const specials = { pledge: 'pledged to go public 📣', hide: 'lay low 🎒', clean: 'cleaned the kill 🧹' };
           html += `<div class="card"><h3>🌙 Your nights</h3><div class="log">${
             view.recap.yours.map(x => `<div class="entry">Night ${x.night}: ${
-              x.skip ? 'held your fire' : `${verbs[x.role] || 'chose'} ${esc(x.target)}${x.result ? ` → <strong>${x.result}</strong>` : ''}`
+              x.special ? specials[x.special]
+              : x.skip ? 'did nothing'
+              : `${verbs[x.role] || 'chose'} ${esc(x.target)}${x.result ? ` → <strong>${esc(x.result)}</strong>` : ''}`
             }</div>`).join('')
           }</div></div>`;
         }
