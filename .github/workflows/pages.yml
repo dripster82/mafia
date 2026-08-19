@@ -25,4 +25,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B gh-pages
+          # Stamp asset URLs with the commit so browsers fetch fresh JS/CSS
+          # after every deploy instead of serving 10-minute-stale caches.
+          sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" index.html
+          git commit -am "Stamp build ${GITHUB_SHA::8}"
           git push -f origin gh-pages
