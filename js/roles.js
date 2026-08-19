@@ -37,18 +37,22 @@ const ROLES = {
 
 const MIN_PLAYERS = 4;
 
-/* Shared PeerJS options. STUN alone fails between many real-world networks
- * (e.g. phone on cellular vs host on Wi-Fi), so include a free TURN relay
- * (Open Relay) as a fallback path. */
+/* Shared PeerJS options. STUN alone fails on restrictive networks (guest
+ * Wi-Fi with client isolation, blocked UDP, cellular CGNAT), so a TURN
+ * relay (Metered) provides the fallback path — the turns:443 TCP endpoint
+ * gets through networks that only allow HTTPS-style traffic. */
+const TURN_USER = 'a44214e32acbc0ccccebf87d';
+const TURN_PASS = 'qT0S5RzWuh9VSFYe';
 const PEER_OPTS = {
   debug: 1,
   config: {
     iceServers: [
       { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-      { urls: 'stun:stun.cloudflare.com:3478' },
-      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-      { urls: 'turns:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'turn:global.relay.metered.ca:80', username: TURN_USER, credential: TURN_PASS },
+      { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: TURN_USER, credential: TURN_PASS },
+      { urls: 'turn:global.relay.metered.ca:443', username: TURN_USER, credential: TURN_PASS },
+      { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: TURN_USER, credential: TURN_PASS },
     ],
   },
 };
