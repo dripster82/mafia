@@ -14,7 +14,7 @@ const Host = (() => {
   let localConn = null; // the host's own loopback connection
   let hostName = null;
   let G = null;        // game state
-  let settings = { safeFirstNight: false, maxMafia: 0, showVoters: true, nightTimer: 120, dayTimer: 300 }; // survives new games
+  let settings = { safeFirstNight: true, maxMafia: 0, showVoters: true, noSelfHeal: false, nightTimer: 120, dayTimer: 300 }; // survives new games
   let phaseTimer = null; // auto-advance timeout for the current phase
 
   /* Arm (or clear, with seconds=0) the current phase's auto-advance timer. */
@@ -123,7 +123,13 @@ const Host = (() => {
       close() {},
       send(msg) {
         if (msg.t !== 'state') return;
-        setTimeout(() => botAct(conn), 700 + Math.random() * 1200);
+        // Humanized pace: power-role night actions take 2-5s, everything
+        // else (confirming, chatting, voting) 1-3s.
+        const v = msg.view;
+        const delay = (v.phase === 'night' && v.night && v.night.prompt)
+          ? 2000 + Math.random() * 3000
+          : 1000 + Math.random() * 2000;
+        setTimeout(() => botAct(conn), delay);
       },
     };
     handleJoin(conn, { t: 'join', name });
@@ -146,11 +152,58 @@ const Host = (() => {
     'The mafia is definitely among us…',
   ];
 
+  const rndOf = a => a[Math.floor(Math.random() * a.length)];
+
+  /* Role-aware table talk: bots use what they actually know. */
   function botLine(p) {
     const others = alivePlayers().filter(t => t.id !== p.id);
-    const name = others.length ? others[Math.floor(Math.random() * others.length)].name : 'someone';
-    const line = BOT_LINES[Math.floor(Math.random() * BOT_LINES.length)];
-    return line.replace('{name}', name);
+    const r = Math.random();
+
+    if (p.role === 'detective' && p.intel && p.intel.length) {
+      const mafiaKnown = p.intel.filter(i => { const t = getPlayer(i.targetId); return i.isMafia && t && t.alive; });
+      const cleared = p.intel.filter(i => { const t = getPlayer(i.targetId); return !i.isMafia && t && t.alive; });
+      if (mafiaKnown.length && r < 0.55) {
+        const t = getPlayer(rndOf(mafiaKnown).targetId);
+        return rndOf([
+          `I'm the detective — ${t.name} is mafia. Vote them out!`,
+          `Listen carefully: it's ${t.name}. I'd bet my badge on it.`,
+          `I've been watching ${t.name} all night… it's them.`,
+        ]);
+      }
+      if (cleared.length && r < 0.8) {
+        const t = getPlayer(rndOf(cleared).targetId);
+        return rndOf([
+          `For what it's worth, I'm certain ${t.name} is innocent.`,
+          `It's definitely not ${t.name} — let's look elsewhere.`,
+          `Leave ${t.name} alone, they're clean. Trust me.`,
+        ]);
+      }
+    }
+
+    if (p.role === 'mafia') {
+      const town = others.filter(t => t.role !== 'mafia');
+      if (town.length && r < 0.7) {
+        const t = rndOf(town);
+        return rndOf([
+          `${t.name} is acting really suspicious, if you ask me.`,
+          `My money's on ${t.name}.`,
+          `Did anyone else see ${t.name} hesitate? Just saying…`,
+          `It's obviously ${t.name}. Who's with me?`,
+        ]);
+      }
+      return rndOf(['It wasn’t me, I promise!', 'I was asleep all night, honest.', 'Let’s not rush this vote.']);
+    }
+
+    if (p.role === 'doctor' && G.announce && G.announce.kind === 'dawn' &&
+        (G.announce.saved || G.announce.savedName) && r < 0.4) {
+      return rndOf([
+        'Lucky someone was watching over the town last night…',
+        'Good thing nobody died, eh? 😉',
+      ]);
+    }
+
+    const name = others.length ? rndOf(others).name : 'someone';
+    return rndOf(BOT_LINES).replace('{name}', name);
   }
 
   function botAct(conn) {
@@ -170,9 +223,22 @@ const Host = (() => {
         return;
       }
       if (!(p.id in G.votes)) {
-        const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
-        opts.push('nobody');
-        handleVote(p, opts[Math.floor(Math.random() * opts.length)]);
+        // Vote with what the bot knows: detectives go after confirmed mafia,
+        // mafia push a townsperson, everyone else leans cautious.
+        let target = null;
+        if (p.role === 'detective' && p.intel) {
+          const m = p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && t.role === 'mafia');
+          if (m.length) target = m[0].id;
+        } else if (p.role === 'mafia') {
+          const town = alivePlayers().filter(t => t.role !== 'mafia');
+          target = (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
+        }
+        if (!target) {
+          const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
+          opts.push('nobody', 'nobody'); // lean toward sparing without evidence
+          target = rndOf(opts);
+        }
+        handleVote(p, target);
       }
     }
   }
@@ -349,7 +415,9 @@ const Host = (() => {
     // (Kept out of the game log — the host is a player and must not see it.)
     if (p.role === 'detective') {
       const target = getPlayer(targetId);
-      send(p.id, { t: 'investigation', name: target.name, isMafia: target.role === 'mafia' });
+      const isMafia = target.role === 'mafia';
+      if (p.isBot) (p.intel = p.intel || []).push({ targetId, isMafia });
+      send(p.id, { t: 'investigation', name: target.name, isMafia });
     }
 
     maybeResolveNight();
@@ -358,7 +426,7 @@ const Host = (() => {
 
   function nightTargetsFor(p) {
     if (p.role === 'mafia') return alivePlayers().filter(t => t.role !== 'mafia');
-    if (p.role === 'doctor') return alivePlayers();
+    if (p.role === 'doctor') return alivePlayers().filter(t => !settings.noSelfHeal || t.id !== p.id);
     if (p.role === 'detective') return alivePlayers().filter(t => t.id !== p.id);
     return [];
   }
@@ -394,11 +462,18 @@ const Host = (() => {
 
     let killed = null;
     let saved = false;
+    let savedName = null;
     let wounded = null;
     if (killTarget) {
       if (killTarget === savedId) {
         saved = true;
-        addLog(`The mafia struck, but the doctor saved their target!`, true);
+        // Only the first night reveals WHO the doctor saved.
+        if (G.dayNum === 1) {
+          savedName = getPlayer(killTarget).name;
+          addLog(`${savedName} was attacked, but the doctor saved them!`, true);
+        } else {
+          addLog(`The mafia struck, but the doctor saved their target!`, true);
+        }
       } else if (G.dayNum === 1 && settings.safeFirstNight) {
         wounded = getPlayer(killTarget);
         addLog(`${wounded.name} was wounded in the night, but survived!`, true);
@@ -418,6 +493,7 @@ const Host = (() => {
       killedName: killed ? killed.name : null,
       killedRole: killed ? killed.role : null,
       woundedName: wounded ? wounded.name : null,
+      savedName,
       saved,
     };
 
@@ -558,7 +634,7 @@ const Host = (() => {
       roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, settings.maxMafia) : null,
       settings: {
         safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
-        nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+        noSelfHeal: settings.noSelfHeal, nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
       },
       timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
       you: {
@@ -677,6 +753,8 @@ const Host = (() => {
             </select></label>
           <label class="opt"><input type="checkbox" id="opt-show-voters" ${settings.showVoters ? 'checked' : ''}>
             Show who voted for who (unticked = secret ballot)</label>
+          <label class="opt"><input type="checkbox" id="opt-no-self-heal" ${settings.noSelfHeal ? 'checked' : ''}>
+            Doctor can't protect themselves</label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -750,6 +828,8 @@ const Host = (() => {
     if (om) om.onchange = () => { settings.maxMafia = parseInt(om.value, 10) || 0; broadcast(); };
     const ov = el('opt-show-voters');
     if (ov) ov.onchange = () => { settings.showVoters = ov.checked; broadcast(); };
+    const osh = el('opt-no-self-heal');
+    if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
     const ont = el('opt-night-timer');
     if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
     const odt = el('opt-day-timer');

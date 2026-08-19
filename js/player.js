@@ -392,6 +392,10 @@ const Player = (() => {
         return `<div class="banner death"><span class="big-emoji">🩹</span>
           <p><strong>${esc(a.woundedName)}</strong> was wounded in the night — but survived!</p></div>`;
       }
+      if (a.savedName) {
+        return `<div class="banner day"><span class="big-emoji">💉</span>
+          <p><strong>${esc(a.savedName)}</strong> was attacked, but the doctor saved them!</p></div>`;
+      }
       return `<div class="banner day"><span class="big-emoji">${a.saved ? '💉' : '🌤'}</span>
         <p>${a.saved ? 'The mafia struck, but the doctor saved their target — no one died!' : 'No one died in the night.'}</p></div>`;
     }
@@ -431,7 +435,8 @@ const Player = (() => {
         <p class="muted">${local ? 'Share the room code — start the game below once everyone has joined.' : 'Waiting for the host to start the game.'}</p>
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}
         ${view.settings ? `<p class="muted small-text">First night: ${view.settings.safeFirstNight ? 'no deaths' : 'normal'} ·
-          Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}<br>
+          Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}
+          ${view.settings.noSelfHeal ? ' · Doctor: no self-heal' : ''}<br>
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
       html += profileCardHTML();
