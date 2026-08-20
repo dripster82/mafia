@@ -18,7 +18,7 @@ const Host = (() => {
     safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false,
     ghostVote: false,
     lastWords: true,     // eliminated players leave last words (the Forger needs this)
-    revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need this)
+    revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need it OFF)
     nightTimer: 120, dayTimer: 300,
     roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
              tracker: false, coroner: false, bookkeeper: false, mayor: false,
@@ -1949,12 +1949,14 @@ const Host = (() => {
     }</div></div>`;
   }
 
-  // Roles that only work when a certain game option is on. Ticking the role
-  // turns the option on; turning the option off unticks the role.
+  // Roles that only work with a certain game option in a certain position.
+  // Ticking the role forces the option there; moving the option away unticks
+  // the role. Coroner/Bookkeeper trade in role intel, so deaths must NOT
+  // reveal roles publicly or their powers are worthless.
   const ROLE_NEEDS = {
-    forger: { setting: 'lastWords', label: 'needs “last words” on' },
-    coroner: { setting: 'revealOnDeath', label: 'needs “reveal roles on death” on' },
-    bookkeeper: { setting: 'revealOnDeath', label: 'needs “reveal roles on death” on' },
+    forger: { setting: 'lastWords', value: true, label: 'needs “last words” on' },
+    coroner: { setting: 'revealOnDeath', value: false, label: 'needs “reveal roles on death” OFF' },
+    bookkeeper: { setting: 'revealOnDeath', value: false, label: 'needs “reveal roles on death” OFF' },
   };
 
   const ROLE_GROUPS = [
@@ -2012,7 +2014,7 @@ const Host = (() => {
           <label class="opt"><input type="checkbox" id="opt-last-words" ${settings.lastWords ? 'checked' : ''}>
             🪦 Eliminated players leave last words <span class="muted small-text">(the Forger needs this on)</span></label>
           <label class="opt"><input type="checkbox" id="opt-reveal-death" ${settings.revealOnDeath ? 'checked' : ''}>
-            Reveal a player's role when they die <span class="muted small-text">(the Coroner and Bookkeeper need this on)</span></label>
+            Reveal a player's role when they die <span class="muted small-text">(the Coroner and Bookkeeper need this OFF — their intel is the substitute)</span></label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -2109,7 +2111,8 @@ const Host = (() => {
     const ord = el('opt-reveal-death');
     if (ord) ord.onchange = () => {
       settings.revealOnDeath = ord.checked;
-      if (!ord.checked) { settings.roles.coroner = false; settings.roles.bookkeeper = false; }
+      // With roles announced on every death, the intel roles have no job.
+      if (ord.checked) { settings.roles.coroner = false; settings.roles.bookkeeper = false; }
       broadcast();
     };
     const ont = el('opt-night-timer');
@@ -2120,8 +2123,8 @@ const Host = (() => {
       cb.onchange = () => {
         const r = cb.dataset.roleOpt;
         settings.roles[r] = cb.checked;
-        // A role that depends on a game option drags that option on with it.
-        if (cb.checked && ROLE_NEEDS[r]) settings[ROLE_NEEDS[r].setting] = true;
+        // A role that depends on a game option drags that option into place.
+        if (cb.checked && ROLE_NEEDS[r]) settings[ROLE_NEEDS[r].setting] = ROLE_NEEDS[r].value;
         broadcast();
       };
     });
