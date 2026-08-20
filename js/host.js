@@ -1145,9 +1145,11 @@ const Host = (() => {
       }
     });
 
-    // 12. Mortician revival (bodies from before tonight).
+    // 12. Mortician revival (bodies from before tonight). The ritual was
+    // performed during the night, so it completes even if the mortician was
+    // killed tonight — a dying breath still raises the dead.
     let revivedName = null;
-    alivePlayers().filter(p => p.role === 'mortician' && !p.usedRaise).forEach(m => {
+    G.players.filter(p => p.role === 'mortician' && !p.usedRaise && !p.spectator).forEach(m => {
       const t = eff(m);
       if (t && t !== 'skip') {
         const body = getPlayer(t);
@@ -1159,6 +1161,10 @@ const Host = (() => {
           revivedName = body.name;
           report(body, '⚰️ You gasp awake — the Mortician has raised you from the dead!');
           recapResult(m, `raised ${body.name} from the dead`);
+        } else {
+          // Never silent: a raise that can't complete tells the mortician so.
+          recapResult(m, 'the ritual failed');
+          if (m.alive) report(m, '⚰️ Your ritual failed — the body would not stir.');
         }
       }
     });
@@ -1173,7 +1179,10 @@ const Host = (() => {
 
     // 14. Dawn intelligence.
     alivePlayers().forEach(p => {
-      if (blocked.has(p.id)) report(p, '🚫 Someone prevented you from acting last night.');
+      if (blocked.has(p.id)) {
+        report(p, '🚫 Someone prevented you from acting last night.');
+        recapResult(p, 'prevented by the Fixer'); // the recap shouldn't claim it happened
+      }
     });
     alivePlayers().filter(p => p.role === 'detective').forEach(d => {
       const t = eff(d);

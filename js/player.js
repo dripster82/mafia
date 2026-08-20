@@ -791,7 +791,7 @@ const Player = (() => {
           mafia: 'targeted', don: 'targeted', doctor: 'protected', detective: 'investigated',
           vigilante: 'shot at', watcher: 'watched', tracker: 'followed', coroner: 'examined',
           bodyguard: 'guarded', fixer: 'blocked', framer: 'framed', poisoner: 'poisoned',
-          consigliere: 'studied', forger: 'marked', recruiter: 'approached', mortician: 'raised',
+          consigliere: 'studied', forger: 'marked', recruiter: 'approached', mortician: 'tried to raise',
         };
         const specials = { pledge: 'pledged to go public 📣', hide: 'lay low 🎒', clean: 'cleaned the kill 🧹' };
         const actionLine = x =>
