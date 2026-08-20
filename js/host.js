@@ -1060,12 +1060,13 @@ const Host = (() => {
     // 7. Resolve attacks.
     const deaths = new Map(); // id -> cause
     let saved = false;
+    const guardSaves = []; // guards who took the hit but were saved by the doctor
     const attack = (targetId, cause, guardable) => {
       if (immune.has(targetId)) return;
       if (targetId === savedId) { saved = true; return; }
       const guard = guardable ? guards[targetId] : null;
       if (guard && guard.alive) {
-        if (guard.id === savedId) { saved = true; return; }
+        if (guard.id === savedId) { saved = true; guardSaves.push({ guard, targetId }); return; }
         deaths.set(guard.id, 'guard');
         return;
       }
@@ -1108,6 +1109,7 @@ const Host = (() => {
       if (G.dayNum === 1 && settings.safeFirstNight && cause !== 'poison') {
         woundedNames.push(victim.name);
         woundedIds.push(id);
+        if (cause === 'guard') report(victim, '🛡 You were hurt shielding your charge last night.');
         return;
       }
       victim.alive = false;
@@ -1183,6 +1185,11 @@ const Host = (() => {
         report(p, '🚫 Someone prevented you from acting last night.');
         recapResult(p, 'prevented by the Fixer'); // the recap shouldn't claim it happened
       }
+    });
+    // A guard who took the hit knows it — even when the doctor saved them.
+    guardSaves.forEach(({ guard, targetId }) => {
+      report(guard, `🛡 You took the hit meant for ${nameOf(targetId)} — the doctor pulled you through.`);
+      recapResult(guard, `took the hit for ${nameOf(targetId)}, saved by the doctor`);
     });
     alivePlayers().filter(p => p.role === 'detective').forEach(d => {
       const t = eff(d);
