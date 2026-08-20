@@ -211,3 +211,12 @@ function roleSummary(n, opts) {
   });
   return parts.join(' · ');
 }
+
+/* Public-lobby directory: hosts that tick "Public game" announce their lobby
+ * to this topic on ntfy.sh (a free, open pub/sub service), and the join page
+ * polls the same topic to list open games. The topic name is derived from the
+ * site's hostname, so forks automatically get their own separate list.
+ * Override the endpoint with window.MAFIA_LOBBY_URL (before the scripts load)
+ * to use a different ntfy topic/server or a local stub for testing. */
+const LOBBY_URL = (typeof window !== 'undefined' && window.MAFIA_LOBBY_URL) ||
+  ('https://ntfy.sh/mafia-night-' + (location.hostname || 'local').replace(/[^a-zA-Z0-9]/g, '-'));

@@ -19,6 +19,7 @@ const Host = (() => {
     ghostVote: false,
     lastWords: true,     // eliminated players leave last words (the Forger needs this)
     showNightWaiting: true, // after 10s, name who the night is still waiting on
+    publicGame: false,   // list this lobby on the join page's public directory
     revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need it OFF)
     nightTimer: 120, dayTimer: 300,
     roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
@@ -28,6 +29,7 @@ const Host = (() => {
              jester: false, executioner: false, drifter: false },
   };
   let phaseTimer = null; // auto-advance timeout for the current phase
+  let lobbyBeacon = null; // periodic public-lobby announcement while listed
   let voteCloseTimer = null; // short pause between the last vote and the verdict
   let verdictTimer = null;   // when the verdict screen moves on
 
@@ -118,6 +120,7 @@ const Host = (() => {
     peer.on('disconnected', () => {
       try { peer.reconnect(); } catch (e) { /* destroyed */ }
     });
+    startLobbyBeacon();
     render();
   }
 
@@ -133,8 +136,35 @@ const Host = (() => {
   }
 
   function destroy() {
+    announcePublic(true);
+    clearInterval(lobbyBeacon);
     if (peer) { try { peer.destroy(); } catch (e) {} }
     peer = null; G = null; conns = {}; localConn = null;
+  }
+
+  /* Announce (or withdraw, with closing=true) this lobby on the public
+   * directory. Best-effort: failures are silent — the game works without it. */
+  function announcePublic(closing) {
+    if (!G || !roomCode) return;
+    if (!closing && (G.phase !== 'lobby' || !settings.publicGame)) return;
+    if (closing && !settings.publicGame) return;
+    try {
+      fetch(LOBBY_URL, {
+        method: 'POST',
+        body: JSON.stringify({
+          code: roomCode,
+          host: hostName,
+          players: G.players.filter(p => p.connected).length,
+          closed: !!closing,
+          ts: Date.now(),
+        }),
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  function startLobbyBeacon() {
+    clearInterval(lobbyBeacon);
+    lobbyBeacon = setInterval(() => announcePublic(), 25000);
   }
 
   /* ---------------- crash/reload insurance ----------------
@@ -232,6 +262,7 @@ const Host = (() => {
     }
 
     addLog('The host reconnected — the game resumes.');
+    startLobbyBeacon();
     broadcast();
     return true;
   }
@@ -766,6 +797,7 @@ const Host = (() => {
       if (towns.length) ex.execTargetId = rndOf(towns).id;
     });
     addLog(`Game started with ${G.players.length} players (${roleSummary(G.players.length, deckOpts())}).`, true);
+    announcePublic(true); // withdraw the lobby from the public directory
     G.phase = 'reveal';
     G.confirms = {};
     setPhaseTimer(0);
@@ -2170,6 +2202,8 @@ const Host = (() => {
           Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
         </div>
         <div class="card"><h3>Game options</h3>
+          <label class="opt"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
+            🌐 Public game — list this lobby on the join page so anyone can find and join</label>
           <label class="opt"><input type="checkbox" id="opt-safe-night" ${settings.safeFirstNight ? 'checked' : ''}>
             No deaths on the first night — the victim is only wounded</label>
           <label class="opt">Max mafia:
@@ -2265,6 +2299,12 @@ const Host = (() => {
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
     });
+    const op = el('opt-public');
+    if (op) op.onchange = () => {
+      if (op.checked) { settings.publicGame = true; announcePublic(); }
+      else { announcePublic(true); settings.publicGame = false; }
+      broadcast();
+    };
     const os = el('opt-safe-night');
     if (os) os.onchange = () => { settings.safeFirstNight = os.checked; broadcast(); };
     const om = el('opt-max-mafia');

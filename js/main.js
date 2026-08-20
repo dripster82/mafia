@@ -23,6 +23,59 @@ const App = (() => {
     }
   }
 
+  const escText = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* ---- Public game directory (see LOBBY_URL in roles.js) ---- */
+
+  let publicPoll = null;
+
+  async function loadPublicGames() {
+    const box = el('public-games');
+    if (!box) return;
+    try {
+      const res = await fetch(LOBBY_URL + '/json?poll=1&since=90s', { cache: 'no-store' });
+      if (!res.ok) throw new Error('http ' + res.status);
+      const text = await res.text();
+      // Newline-delimited ntfy events; each message is one lobby announcement.
+      // Everything in it is untrusted public input — validate and escape.
+      const rooms = {};
+      text.split('\n').forEach(line => {
+        try {
+          const ev = JSON.parse(line);
+          if (ev.event && ev.event !== 'message') return;
+          const r = JSON.parse(ev.message);
+          if (!r || !/^[A-Z0-9]{5}$/.test(String(r.code || ''))) return;
+          if (!rooms[r.code] || (r.ts || 0) >= (rooms[r.code].ts || 0)) rooms[r.code] = r;
+        } catch (e) {}
+      });
+      const list = Object.values(rooms).filter(r => !r.closed)
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 10);
+      box.innerHTML = list.length
+        ? list.map(r => `<button class="btn vote-line public-room" data-code="${r.code}">
+            <span class="vote-voters">${Math.max(1, parseInt(r.players, 10) || 1)} waiting</span>
+            <span class="vote-target">${escText(String(r.host || 'Someone').slice(0, 16))}’s game · <strong>${r.code}</strong></span>
+          </button>`).join('')
+        : '<p class="muted small-text">No public games right now. Host one and tick “🌐 Public game” — or join a private game with its code.</p>';
+      box.querySelectorAll('[data-code]').forEach(b => {
+        b.onclick = () => {
+          el('join-code').value = b.dataset.code;
+          el('join-name').focus();
+        };
+      });
+    } catch (e) {
+      box.innerHTML = '<p class="muted small-text">Couldn’t reach the public game directory — join with a room code instead.</p>';
+    }
+  }
+
+  function watchPublicGames() {
+    loadPublicGames();
+    clearInterval(publicPoll);
+    publicPoll = setInterval(() => {
+      if (!el('screen-join').classList.contains('active')) { clearInterval(publicPoll); return; }
+      loadPublicGames();
+    }, 15000);
+  }
+
   function showScreen(name) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     el('screen-' + name).classList.add('active');
@@ -77,8 +130,10 @@ const App = (() => {
     el('btn-go-join').onclick = () => {
       el('join-error').classList.add('hidden');
       showScreen('join');
+      watchPublicGames();
       el('join-code').focus();
     };
+    el('btn-refresh-public').onclick = loadPublicGames;
 
     document.querySelectorAll('.back-home').forEach(b => {
       b.onclick = () => showScreen('home');
@@ -110,10 +165,12 @@ const App = (() => {
     if (codeParam && (!stored || stored.roomCode !== codeParam)) {
       sessionStorage.removeItem('mafia-session');
       showScreen('join');
+      watchPublicGames();
       el('join-code').value = codeParam;
       el('join-name').focus();
     } else if (!Player.tryResume() && codeParam) {
       showScreen('join');
+      watchPublicGames();
       el('join-code').value = codeParam;
       el('join-name').focus();
     }

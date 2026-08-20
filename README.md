@@ -26,6 +26,19 @@ players, kick in the lobby, play again) showing only public information.
 
 ## Features
 
+### Public games
+
+Hosts can tick **🌐 Public game** in the lobby to list the room on the join
+page, where anyone on the same site can see it ("Paul's game · 3 waiting") and
+join with one tap. Games are private by default; listings withdraw when the
+game starts and fade out within ~90 seconds if the host disappears.
+
+The directory is a topic on [ntfy.sh](https://ntfy.sh) (a free, open pub/sub
+service) — no accounts or keys. The topic name is derived from the site's
+hostname (see `LOBBY_URL` at the bottom of `js/roles.js`), so forks
+automatically get their own separate list; override `window.MAFIA_LOBBY_URL`
+to point at a different topic, a self-hosted ntfy server, or a local stub.
+
 ### Table talk
 
 - **Chat** during the lobby and every day phase; history carries across rounds
