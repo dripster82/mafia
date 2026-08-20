@@ -1620,12 +1620,21 @@ const Host = (() => {
 
   /* ---------------- bot players ---------------- */
 
-  const BOT_NAMES = ['Rita', 'Max', 'Ivy', 'Gus', 'Sal', 'Fay', 'Ned', 'Lou', 'Peg', 'Vic'];
+  const BOT_NAMES = [
+    'Rita', 'Max', 'Ivy', 'Gus', 'Sal', 'Fay', 'Ned', 'Lou', 'Peg', 'Vic',
+    'Milo', 'Otto', 'Nora', 'Iris', 'Enzo', 'Beau', 'Cleo', 'Dora', 'Ezra', 'Finn',
+    'Hugo', 'June', 'Kira', 'Leon', 'Mona', 'Nico', 'Remy', 'Rosa', 'Thea', 'Wade',
+    'Basil', 'Clara', 'Dolly', 'Edwin', 'Flora', 'Grace', 'Hazel', 'Jonas', 'Lydia',
+    'Mabel', 'Oscar', 'Pearl', 'Rufus', 'Sadie', 'Tessa',
+  ];
 
   function addBot() {
     if (!G || G.phase !== 'lobby' || G.players.length >= 15) return;
-    const name = BOT_NAMES.find(n => !G.players.some(p => p.name === n));
-    if (!name) return;
+    // Random pick from whatever names are still free (humans might hold some).
+    const free = BOT_NAMES.filter(n =>
+      !G.players.some(p => p.name.toLowerCase() === n.toLowerCase()));
+    if (!free.length) return;
+    const name = rndOf(free);
     const conn = {
       open: true,
       _playerId: null,
