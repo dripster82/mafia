@@ -170,17 +170,43 @@ input[type="text"]:focus { border-color: var(--accent); }
 .phase-timer.urgent { color: var(--accent); border-color: var(--accent); animation: pulse 1s infinite; }
 
 /* Vote rows: voters' names on the left, the candidate floated right */
-.vote-line { gap: 10px; }
-.vote-line .vote-voters {
+/* Vote rows: identity + count pill on the first line, voters wrap below. */
+.target-grid .vote-line {
+  display: flex; flex-direction: column; align-items: stretch;
+  justify-content: flex-start; gap: 0;
+}
+.vote-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vote-who { display: flex; align-items: center; gap: 7px; min-width: 0; font-weight: 700; }
+.vote-who .vote-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vote-roleic { font-size: 0.85em; opacity: 0.9; }
+.vote-count-pill {
+  font-size: 0.78rem; font-weight: 700; color: var(--text);
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 9px; white-space: nowrap; flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.vote-line.leading .vote-count-pill { border-color: #d9a542; color: #d9a542; }
+.vote-deadpill {
+  font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px 8px; white-space: nowrap; flex-shrink: 0;
+}
+.vote-under {
+  display: block; margin-top: 5px; text-align: left;
+  color: var(--muted); font-size: 0.76rem; font-weight: 500; line-height: 1.4;
+}
+.vote-line.self-row { cursor: default; opacity: 0.85; border-style: dashed; }
+.vote-line.self-row:hover { filter: none; }
+.vote-line.dead-row { opacity: 0.45; border-style: solid; }
+.vote-line.dead-row .vote-who { text-decoration: line-through; }
+
+/* The public-games listing keeps the single-line voters/target layout. */
+.public-room { gap: 10px; display: flex; justify-content: space-between; align-items: center; }
+.public-room .vote-voters {
   flex: 1; min-width: 0; text-align: left;
   font-size: 0.76rem; font-weight: 500; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.vote-line .vote-target { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
-.vote-line.self-row { cursor: default; opacity: 0.85; border-style: dashed; display: flex; justify-content: space-between; align-items: center; }
-.vote-line.self-row:hover { filter: none; }
-.vote-line.dead-row { opacity: 0.45; border-style: solid; }
-.vote-line.dead-row .vote-target { text-decoration: line-through; }
+.public-room .vote-target { font-weight: 700; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
 
 /* Profile editing */
 .profile-row { display: flex; gap: 8px; margin-top: 8px; }

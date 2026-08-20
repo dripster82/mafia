@@ -392,30 +392,30 @@ const Player = (() => {
     const deadLabels = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding', mafia: 'killed' };
     const rows = v.targets.map(t => ({
       id: t.id, self: t.self, dead: t.dead, causeOfDeath: t.causeOfDeath, role: t.role,
-      label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}${t.poisoned ? ' ☠️' : ''}`,
+      avatar: t.avatar, name: t.name, poisoned: t.poisoned,
     }));
-    if (opts.includeNobody) rows.push({ id: 'nobody', label: '🕊 No one' });
+    if (opts.includeNobody) rows.push({ id: 'nobody', avatar: '🕊', name: 'No one' });
     // The row closest to elimination gets highlighted.
     let leadId = null, leadN = 0;
     v.targets.forEach(t => { const n = v.counts[t.id] || 0; if (!t.dead && n > leadN) { leadN = n; leadId = t.id; } });
     return `<div class="target-grid">${
       rows.map(t => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
-        const count = v.counts[t.id] ? `${v.counts[t.id]} 🗳` : '';
-        if (t.dead) {
-          const roleTag = t.role ? `${ROLES[t.role].icon} ` : '';
-          return `<div class="btn vote-line self-row dead-row">
-            <span class="vote-voters">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>
-            <span class="vote-target">${roleTag}${t.label}</span>
-          </div>`;
-        }
-        const roleIcon = t.role ? `${ROLES[t.role].icon} ` : '';
-        const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
-          <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${roleIcon}${t.label}</span>`;
-        const leading = t.id === leadId ? ' leading' : '';
-        return (t.self || opts.readonly)
-          ? `<div class="btn vote-line self-row${leading}">${inner}</div>`
-          : `<button class="btn vote-line${leading} ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
+        const count = v.counts[t.id] || 0;
+        // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
+        const who = `<span class="vote-who"><span>${t.avatar || ''}</span>
+          <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
+          ${t.poisoned ? '<span>☠️</span>' : ''}
+          ${t.role ? `<span class="vote-roleic">${ROLES[t.role].icon}</span>` : ''}</span>`;
+        const pill = t.dead
+          ? `<span class="vote-deadpill">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`
+          : count ? `<span class="vote-count-pill">${count} 🗳</span>` : '';
+        const inner = `<span class="vote-top">${who}${pill}</span>
+          ${votersHere ? `<span class="vote-under">↳ ${votersHere}</span>` : ''}`;
+        const cls = `btn vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row' : ''}${t.self ? ' self-row' : ''}`;
+        return (t.dead || t.self || opts.readonly)
+          ? `<div class="${cls}">${inner}</div>`
+          : `<button class="${cls} ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
       }).join('')
     }${opts.retract && v.yourVote ? '<button class="btn ghost" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
   }
