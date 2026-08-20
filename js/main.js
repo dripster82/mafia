@@ -41,6 +41,20 @@ const App = (() => {
     const ver = el('app-version');
     if (ver && ver.textContent.includes('__BUILD__')) ver.textContent = 'Version dev';
 
+    // A host that reloaded mid-game can pick the same room back up.
+    const snap = typeof Host !== 'undefined' && Host.snapshotInfo && Host.snapshotInfo();
+    if (snap) {
+      const b = document.createElement('button');
+      b.className = 'btn big';
+      b.id = 'btn-resume-game';
+      b.textContent = `▶ Resume game ${snap.roomCode} (${snap.phase} ${snap.dayNum || ''})`.trim();
+      el('btn-go-host').after(b);
+      b.onclick = () => {
+        showScreen('host');
+        if (!Host.resume()) { showScreen('home'); b.remove(); }
+      };
+    }
+
     el('btn-go-host').onclick = () => {
       el('host-error').classList.add('hidden');
       showScreen('host-setup');

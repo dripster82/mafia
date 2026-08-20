@@ -135,6 +135,25 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chat-msg { font-size: 0.9rem; line-height: 1.4; word-break: break-word; }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
 .chat-msg.chat-ghost { color: var(--muted); font-style: italic; }
+.chat-new-pill {
+  position: fixed; bottom: 68px; left: 50%; transform: translateX(-50%); z-index: 60;
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 999px; padding: 8px 14px; font-size: 0.9rem; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.vote-pressure { font-size: 0.9rem; margin: 0 0 10px; }
+.vote-line.leading { border-color: #d9a542; }
+.guide-fab {
+  position: fixed; right: 14px; bottom: 14px; z-index: 55;
+  width: 44px; height: 44px; border-radius: 50%; font-size: 1.15rem; cursor: pointer;
+  background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.guide-overlay {
+  position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, 0.65);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.guide-panel { max-height: 82vh; overflow-y: auto; width: 100%; max-width: 480px; margin: 0; }
 .chat-log-mafia { border-color: rgba(220, 60, 60, 0.45); }
 .chat-divider {
   text-align: center; font-size: 0.8rem; letter-spacing: 0.08em;

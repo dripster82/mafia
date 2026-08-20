@@ -25,6 +25,8 @@ const Player = (() => {
   let lastTurnKey = null;          // chime once when it's your turn to act
 
   const el = id => document.getElementById(id);
+  // A short buzz for phones in pockets (no-op where unsupported, e.g. iOS).
+  const buzz = () => { try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch (e) {} };
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /* ---------------- join diagnostics ---------------- */
@@ -277,7 +279,7 @@ const Player = (() => {
       // A soft cue the first time each night that YOU have an action pending.
       if (view.phase === 'night' && view.night && view.night.prompt && !view.night.acted) {
         const key = 'night' + view.dayNum;
-        if (key !== lastTurnKey) { lastTurnKey = key; if (prevPhase !== null) Sound.play('turn'); }
+        if (key !== lastTurnKey) { lastTurnKey = key; if (prevPhase !== null) { Sound.play('turn'); buzz(); } }
       }
       render();
     } else if (msg.t === 'toast') {
@@ -303,6 +305,7 @@ const Player = (() => {
     let kind = null;
     if (phase === 'night' && (prevPhase === 'reveal' || prevPhase === 'day' || prevPhase === 'verdict')) kind = 'night';
     if (phase === 'day' && prevPhase === 'night') kind = 'day';
+    if (kind === 'day') buzz(); // the vote is open — wake the pocket
     if (phase === 'ended') Sound.play('win');
     if (!kind || document.querySelector('.phase-overlay')) return;
     Sound.play(kind);
@@ -369,6 +372,20 @@ const Player = (() => {
 
   /* The voting grid — identical for the living and for ghost votes. Dead and
    * voted-out players stay listed, greyed out and unclickable. */
+  /* Live pressure line: how close the leading candidate is to the drop. */
+  function votePressureHTML(v) {
+    let lead = null;
+    v.targets.forEach(t => {
+      const n = v.counts[t.id] || 0;
+      if (!t.dead && n > 0 && (!lead || n > lead.n)) lead = { name: t.name, n };
+    });
+    if (!lead) return '';
+    const gap = v.majority - lead.n;
+    return `<p class="vote-pressure">${gap <= 0
+      ? `⚖️ <strong>${esc(lead.name)}</strong> has a majority!`
+      : `⚖️ <strong>${gap}</strong> more vote${gap > 1 ? 's' : ''} would eliminate <strong>${esc(lead.name)}</strong>`}</p>`;
+  }
+
   function voteGridHTML(v, opts) {
     opts = opts || {};
     const deadLabels = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding', mafia: 'killed' };
@@ -377,6 +394,9 @@ const Player = (() => {
       label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}${t.poisoned ? ' ☠️' : ''}`,
     }));
     if (opts.includeNobody) rows.push({ id: 'nobody', label: '🕊 No one' });
+    // The row closest to elimination gets highlighted.
+    let leadId = null, leadN = 0;
+    v.targets.forEach(t => { const n = v.counts[t.id] || 0; if (!t.dead && n > leadN) { leadN = n; leadId = t.id; } });
     return `<div class="target-grid">${
       rows.map(t => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
@@ -391,9 +411,10 @@ const Player = (() => {
         const roleIcon = t.role ? `${ROLES[t.role].icon} ` : '';
         const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
           <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${roleIcon}${t.label}</span>`;
+        const leading = t.id === leadId ? ' leading' : '';
         return (t.self || opts.readonly)
-          ? `<div class="btn vote-line self-row">${inner}</div>`
-          : `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
+          ? `<div class="btn vote-line self-row${leading}">${inner}</div>`
+          : `<button class="btn vote-line${leading} ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
       }).join('')
     }${opts.retract && v.yourVote ? '<button class="btn ghost" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
   }
@@ -429,6 +450,53 @@ const Player = (() => {
         <input id="mchat-input" type="text" maxlength="200" placeholder="Only the family sees this…" autocomplete="off" value="${esc(mafiaDraft)}">
         <button id="mchat-send" class="btn">Send</button>
       </div></div>`;
+  }
+
+  /* "New messages" pill: chat lives below the vote card, so when a message
+   * lands while the log is off-screen, float a pill that jumps you to it. */
+  let chatSeenLen = 0;
+  function updateChatPill() {
+    const pillId2 = 'chat-new-pill';
+    const old = document.getElementById(pillId2);
+    const log = document.getElementById('chat-log');
+    const total = view && view.chat ? view.chat.length : 0;
+    const offScreen = log && log.getBoundingClientRect().top > window.innerHeight - 80;
+    if (!log || !offScreen) {
+      chatSeenLen = total;
+      if (old) old.remove();
+      return;
+    }
+    if (total > chatSeenLen) {
+      if (old) return;
+      const pill = document.createElement('button');
+      pill.id = pillId2;
+      pill.className = 'chat-new-pill';
+      pill.textContent = '💬 New messages ↓';
+      pill.onclick = () => {
+        chatSeenLen = view && view.chat ? view.chat.length : 0;
+        pill.remove();
+        const l = document.getElementById('chat-log');
+        if (l) l.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      document.body.appendChild(pill);
+    } else if (old) old.remove();
+  }
+
+  /* Floating role-guide: a 📖 button on every screen, full catalogue overlay. */
+  let guideOpen = false;
+  function guideHTML() {
+    const fab = `<button id="btn-role-guide" class="guide-fab" title="Role guide">📖</button>`;
+    if (!guideOpen) return fab;
+    const all = Object.values(ROLES);
+    const section = (title, roles) => `<p class="small-text muted" style="margin:12px 0 2px"><strong>${title}</strong></p>` +
+      roles.map(r => `<p class="small-text" style="margin:6px 0"><strong>${r.icon} ${esc(r.name)}</strong><br>
+        <span class="muted">${esc(r.desc)}</span></p>`).join('');
+    return fab + `<div class="guide-overlay"><div class="guide-panel card">
+      <div class="section-title"><h3>📖 Role guide</h3><button id="btn-guide-close" class="btn small">✕ Close</button></div>
+      ${section('🏘 Village', all.filter(r => r.team === 'town'))}
+      ${section('🔪 Mafia', all.filter(r => r.team === 'mafia'))}
+      ${section('🎭 Neutral', all.filter(r => r.team !== 'town' && r.team !== 'mafia'))}
+    </div></div>`;
   }
 
   /* Lobby-only: rename yourself and pick an avatar. */
@@ -468,6 +536,7 @@ const Player = (() => {
       if (a.revivedName) parts.push(`⚰️ A miracle — <strong>${esc(a.revivedName)}</strong> has risen from the dead!`);
       if (a.mayorName) parts.push(`📣 <strong>${esc(a.mayorName)}</strong> is the Mayor — proven village, and their vote now counts double.`);
       if (!parts.length) parts.push('No one died in the night.');
+      if (a.rumour) parts.push(`🗣 <em>${esc(a.rumour)}</em>`);
       const grim = (a.killed && a.killed.length) || (a.woundedNames && a.woundedNames.length);
       return `<div class="banner ${grim ? 'death' : 'day'}">
         <span class="big-emoji">${a.killed && a.killed.length ? '💀' : a.woundedNames && a.woundedNames.length ? '🩹' : a.saved ? '💉' : a.revivedName ? '⚰️' : '🌤'}</span>
@@ -645,7 +714,8 @@ const Player = (() => {
       html += intelHTML();
 
       if (!n.prompt) {
-        html += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p></div>`;
+        html += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p>
+          ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
       } else if (n.acted) {
         const actedMsg = n.actionSpecial === 'pledge' ? '📣 You will go public at dawn.'
           : n.actionSpecial === 'hide' ? '🎒 You are lying low tonight.'
@@ -653,7 +723,8 @@ const Player = (() => {
           : n.heldFire ? '🕊 You chose to sit tonight out.'
           : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`;
         html += `<div class="card center"><p>${actedMsg}</p>
-          <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p></div>`;
+          <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p>
+          ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
       } else {
         html += `<div class="card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
           n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
@@ -676,6 +747,7 @@ const Player = (() => {
         <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
         <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
         A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
+        ${votePressureHTML(v)}
         ${voteGridHTML(v, { includeNobody: true })}
         ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
           : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
@@ -747,6 +819,7 @@ const Player = (() => {
           }</div></div>`;
         }
       }
+      html += `<button id="btn-copy-result" class="btn" style="width:100%;margin-top:8px">📋 Copy result summary</button>`;
       html += playersListHTML(false);
     }
 
@@ -763,6 +836,8 @@ const Player = (() => {
               : 'no reads yet'
           }</p>`).join('')}</div>`;
     }
+
+    html += guideHTML();
 
     // Keep text inputs alive across re-renders (broadcasts arrive whenever
     // anyone joins, changes profile, chats, or votes).
@@ -821,6 +896,33 @@ const Player = (() => {
     if (ms) ms.onclick = sendMChat;
     const mcl = el('mchat-log');
     if (mcl) mcl.scrollTop = mcl.scrollHeight;
+
+    const gb = el('btn-role-guide');
+    if (gb) gb.onclick = () => { guideOpen = true; render(); };
+    const gc = el('btn-guide-close');
+    if (gc) gc.onclick = () => { guideOpen = false; render(); };
+    const go = c.querySelector('.guide-overlay');
+    if (go) go.onclick = e => { if (e.target === go) { guideOpen = false; render(); } };
+
+    const copyBtn = el('btn-copy-result');
+    if (copyBtn) copyBtn.onclick = () => {
+      const lines = [`🕵️ Mafia Night — ${view.winner === 'town' ? 'the town wins!' : view.winner === 'mafia' ? 'the mafia win!' : view.winner === 'jester' ? 'the Jester wins!' : 'game over'}`];
+      (view.extraWinners || []).forEach(w => lines.push(`🏅 ${w.name} (${ROLES[w.role].name}) also wins — ${w.why}`));
+      if (view.recap && view.recap.all) {
+        lines.push('');
+        view.recap.all.forEach(x => lines.push(`${x.avatar || ''} ${x.name} — ${ROLES[x.role].icon} ${ROLES[x.role].name}`));
+      }
+      if (view.recap && view.recap.timeline && view.recap.timeline.length) {
+        lines.push('');
+        view.recap.timeline.forEach(t => lines.push(`• ${t}`));
+      }
+      const text = lines.join('\n');
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+        .then(() => { copyBtn.textContent = '✅ Copied!'; setTimeout(() => { const b = el('btn-copy-result'); if (b) b.textContent = '📋 Copy result summary'; }, 1500); })
+        .catch(() => prompt('Copy the result:', text));
+    };
+
+    updateChatPill();
 
     // Phase countdown: the host's clock is authoritative; adjust for skew and
     // tick locally so we don't need per-second broadcasts.

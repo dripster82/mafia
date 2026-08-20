@@ -18,6 +18,7 @@ const Host = (() => {
     safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false,
     ghostVote: false,
     lastWords: true,     // eliminated players leave last words (the Forger needs this)
+    showNightWaiting: true, // after 10s, name who the night is still waiting on
     revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need it OFF)
     nightTimer: 120, dayTimer: 300,
     roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
@@ -134,6 +135,105 @@ const Host = (() => {
   function destroy() {
     if (peer) { try { peer.destroy(); } catch (e) {} }
     peer = null; G = null; conns = {}; localConn = null;
+  }
+
+  /* ---------------- crash/reload insurance ----------------
+   * Every broadcast snapshots the whole game to localStorage; if the host's
+   * browser reloads mid-game, the home screen offers to resume: same room
+   * code, bots rebuilt, humans auto-reconnect from their own tabs. */
+
+  const SNAPSHOT_KEY = 'mafia-host-snapshot';
+
+  function saveSnapshot() {
+    try {
+      if (!G || G.phase === 'lobby' || G.phase === 'ended') { localStorage.removeItem(SNAPSHOT_KEY); return; }
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
+        v: 1, ts: Date.now(), roomCode, hostName, settings,
+        localPlayerId: localConn ? localConn._playerId : null,
+        detClaimants: [...(G.detClaimants || [])],
+        G: Object.assign({}, G, { detClaimants: undefined }),
+      }));
+    } catch (e) { /* storage full/blocked — resume just won't be offered */ }
+  }
+
+  function snapshotInfo() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null');
+      if (!s || s.v !== 1 || Date.now() - s.ts > 12 * 3600 * 1000) return null;
+      return { roomCode: s.roomCode, hostName: s.hostName, phase: s.G.phase, dayNum: s.G.dayNum, ts: s.ts };
+    } catch (e) { return null; }
+  }
+
+  function resume() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); } catch (e) {}
+    if (!s || s.v !== 1) return false;
+
+    hostName = s.hostName;
+    roomCode = s.roomCode;
+    settings = Object.assign({}, settings, s.settings);
+    G = s.G;
+    G.detClaimants = new Set(s.detClaimants || []);
+    conns = {};
+
+    document.getElementById('host-content').innerHTML =
+      '<div id="host-player-area"></div><div id="host-controls-area"></div>';
+
+    // The host's own seat loops straight back in.
+    localConn = { open: true, send: msg => Player.receiveLocal(msg), close: () => {}, _playerId: s.localPlayerId };
+    Player.initLocal(hostName, msg => handleMessage(localConn, msg));
+    if (s.localPlayerId) {
+      conns[s.localPlayerId] = localConn;
+      const me = getPlayer(s.localPlayerId);
+      if (me) me.connected = true;
+    }
+
+    // Bots get fresh loopback connections; humans reconnect from their tabs.
+    G.players.filter(p => p.isBot).forEach(p => {
+      const conn = {
+        open: true, _playerId: p.id, _pending: null, _chatDay: G.dayNum,
+        close() {},
+        send(msg) { if (msg.t === 'state') scheduleBot(conn); },
+      };
+      conns[p.id] = conn;
+      p.connected = true;
+    });
+    G.players.filter(p => !p.isBot && p.id !== s.localPlayerId).forEach(p => { p.connected = false; });
+
+    peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
+    peer.on('open', () => {
+      const pill = document.getElementById('host-room-pill');
+      if (pill) pill.textContent = 'Room: ' + roomCode;
+      render();
+    });
+    peer.on('connection', conn => {
+      conn.on('data', msg => handleMessage(conn, msg));
+      conn.on('close', () => handleDisconnect(conn));
+      conn.on('error', () => handleDisconnect(conn));
+    });
+    peer.on('error', err => {
+      if (err.type === 'unavailable-id') {
+        renderFatal('The old game is still open in another tab or window — close it, then resume again.');
+      } else if (err.type !== 'peer-unavailable') {
+        renderFatal('Connection error: ' + err.type + '. Refresh to try again.');
+      }
+    });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+
+    // Re-arm whatever clock the phase was running on.
+    const remaining = G.deadline ? Math.max(5, Math.round((G.deadline - Date.now()) / 1000)) : 0;
+    if (G.phase === 'night' && remaining) setPhaseTimer(remaining, () => { if (G && G.phase === 'night') resolveNight(true); });
+    else if (G.phase === 'day' && remaining) setPhaseTimer(remaining, () => { if (G && G.phase === 'day') resolveVote(true); });
+    else if (G.phase === 'verdict') { G.lastWordsDone = true; scheduleVerdictEnd(8000); }
+    if (G.phase === 'day') {
+      G.voteClosing = false;
+      G.lastChatAt = Date.now();
+      setTimeout(() => { if (G && G.phase === 'day') maybeCloseVoting(); }, 1500);
+    }
+
+    addLog('The host reconnected — the game resumes.');
+    broadcast();
+    return true;
   }
 
   /* ---------------- messaging ---------------- */
@@ -714,6 +814,12 @@ const Host = (() => {
     });
     setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
+    // A 10s grace before naming the slow ones — then re-broadcast to reveal.
+    G.nightStartedAt = Date.now();
+    if (settings.showNightWaiting) {
+      const night = G.dayNum;
+      setTimeout(() => { if (G && G.phase === 'night' && G.dayNum === night) broadcast(); }, 10500);
+    }
     broadcast();
   }
 
@@ -1110,8 +1216,24 @@ const Host = (() => {
       report(b, `📒 The ledger says: ${aliveMafia().length} of the mafia still breathing.`);
     });
 
+    // Day 1 gives the table almost nothing to go on — a rumour seeds the talk.
+    let rumour = null;
+    if (G.dayNum === 1 && alivePlayers().length) {
+      const t = rndOf(alivePlayers());
+      rumour = rndOf([
+        'Someone was seen slipping through the alleys long after midnight…',
+        `Old Mrs. Whittle swears she heard floorboards creaking near ${t.name}'s place last night.`,
+        `A dog barked half the night outside ${t.name}'s window. Dogs know things.`,
+        'Muddy footprints by the well this morning. Fresh ones.',
+        `${t.name} was up awfully late — their lamp was still burning at three.`,
+        'The chapel door was found unlatched at dawn. Nobody will say why.',
+      ]);
+      addLog(`🗣 Rumour: ${rumour}`);
+    }
+
     G.announce = {
       kind: 'dawn',
+      rumour,
       killed: killed.map(k => ({ name: k.name, role: k.role, cause: k.cause })),
       woundedNames,
       savedName,
@@ -1776,6 +1898,7 @@ const Host = (() => {
   function broadcast() {
     G.players.forEach(p => send(p.id, { t: 'state', view: viewFor(p) }));
     render();
+    saveSnapshot();
   }
 
   /* The chat stream as one player sees it: everyone gets the main channel and
@@ -1887,6 +2010,10 @@ const Host = (() => {
             }))
           : null,
         waitingOn: nightActors().filter(a => !(a.id in G.night.actions)).length,
+        // After a 10s grace, name who we're waiting for (host option).
+        waitingNames: settings.showNightWaiting && Date.now() - (G.nightStartedAt || 0) > 10000
+          ? nightActors().filter(a => !(a.id in G.night.actions)).map(a => `${a.avatar || ''} ${a.name}`)
+          : null,
       };
     }
 
@@ -2055,6 +2182,8 @@ const Host = (() => {
             Doctor can't protect themselves</label>
           <label class="opt"><input type="checkbox" id="opt-ghost-vote" ${settings.ghostVote ? 'checked' : ''}>
             👻 The dead get one last vote — usable on any later day</label>
+          <label class="opt"><input type="checkbox" id="opt-night-waiting" ${settings.showNightWaiting ? 'checked' : ''}>
+            😴 After 10 seconds, show who the night is still waiting on <span class="muted small-text">(hints at who holds a night role)</span></label>
           <label class="opt"><input type="checkbox" id="opt-last-words" ${settings.lastWords ? 'checked' : ''}>
             🪦 Eliminated players leave last words <span class="muted small-text">(the Forger needs this on)</span></label>
           <label class="opt"><input type="checkbox" id="opt-reveal-death" ${settings.revealOnDeath ? 'checked' : ''}>
@@ -2146,6 +2275,8 @@ const Host = (() => {
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
     const ogv = el('opt-ghost-vote');
     if (ogv) ogv.onchange = () => { settings.ghostVote = ogv.checked; broadcast(); };
+    const onw = el('opt-night-waiting');
+    if (onw) onw.onchange = () => { settings.showNightWaiting = onw.checked; broadcast(); };
     const olw = el('opt-last-words');
     if (olw) olw.onchange = () => {
       settings.lastWords = olw.checked;
@@ -2174,5 +2305,5 @@ const Host = (() => {
     });
   }
 
-  return { create, destroy, PEER_PREFIX };
+  return { create, destroy, resume, snapshotInfo, PEER_PREFIX };
 })();
