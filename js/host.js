@@ -223,6 +223,12 @@ const Host = (() => {
     // the mafia want them dead, the town wants them protected.
     if (detClaim) (G.detClaimants = G.detClaimants || new Set()).add(speaker.id);
 
+    // "I've been poisoned!" — protective bots put the speaker first tonight.
+    // (True or not: the doctor only learns what's said at the table.)
+    if (/poison/.test(lower) && /\bi\b|\bme\b|i'?m|i'?ve/.test(lower)) {
+      G.protectPriority = [speaker.id, ...(G.protectPriority || []).filter(id => id !== speaker.id)];
+    }
+
     // Public record: any role claim is remembered — if someone else later dies
     // holding that role, the claimant is exposed as a liar.
     const claimMatch = lower.match(/i'?m the (detective|doctor|bodyguard|mayor|vigilante|watcher|tracker|coroner|bookkeeper|mortician)|i am the (detective|doctor|bodyguard|mayor|vigilante|watcher|tracker|coroner|bookkeeper|mortician)|(detective|doctor) here/);
@@ -913,7 +919,12 @@ const Host = (() => {
       const t = eff(po);
       if (t && t !== 'skip') {
         const target = getPlayer(t);
-        if (target && target.alive) { target.poisonedNight = G.dayNum; visits.push({ visitor: po.id, target: t }); }
+        if (target && target.alive) {
+          target.poisonedNight = G.dayNum;
+          visits.push({ visitor: po.id, target: t });
+          // The victim knows — nobody else is told until the body drops.
+          report(target, '☠️ You feel deathly ill — you have been POISONED. Unless the doctor heals you tomorrow night, you will die at dawn.');
+        }
       }
     });
     alivePlayers().forEach(p => {
@@ -1536,14 +1547,20 @@ const Host = (() => {
     const T = ui.targets.map(t => t.id).filter(id => !PSEUDO.includes(id));
     const inT = id => id && T.includes(id);
     const s = id => suspOf(p, id);
-    const suspLeader = min => {
+    const suspLeader = (min, list) => {
       let best = null;
-      T.forEach(id => { if (s(id) >= min && (!best || s(id) > s(best))) best = id; });
+      (list || T).forEach(id => { if (s(id) >= min && (!best || s(id) > s(best))) best = id; });
       return best;
     };
-    const mostTrusted = () => {
+    // The family kills one villager a night; support roles shouldn't waste
+    // their ability on someone who'll be dead by morning anyway.
+    const killPicks = new Set(teamOf(p) === 'mafia'
+      ? killers().map(m => G.night.actions[m.id]).filter(t => t && t !== 'skip') : []);
+    const offKill = killPicks.size ? T.filter(id => !killPicks.has(id)) : T;
+    const TK = offKill.length ? offKill : T;
+    const mostTrusted = list => {
       let best = null;
-      T.forEach(id => { if (!best || s(id) < s(best)) best = id; });
+      (list || T).forEach(id => { if (!best || s(id) < s(best)) best = id; });
       return best;
     };
     const claimant = [...(G.detClaimants || [])].map(getPlayer)
@@ -1599,7 +1616,8 @@ const Host = (() => {
     }
     if (role === 'coroner' || role === 'consigliere') {
       const seen = new Set((p.actions || []).filter(a => a.role === role && a.target).map(a => a.target));
-      const fresh = ui.targets.filter(t => !PSEUDO.includes(t.id) && !seen.has(t.name)).map(t => t.id);
+      let fresh = ui.targets.filter(t => !PSEUDO.includes(t.id) && !seen.has(t.name)).map(t => t.id);
+      if (role === 'consigliere') { const f2 = fresh.filter(id => !killPicks.has(id)); if (f2.length) fresh = f2; }
       return fresh.length ? rndOf(fresh) : (ui.canSkip ? 'skip' : rndOf(T));
     }
     if (role === 'mortician') {
@@ -1616,20 +1634,21 @@ const Host = (() => {
       return 'skip';
     }
     if (role === 'fixer') {
-      if (claimant && Math.random() < 0.7) return claimant.id;  // jam the detective
-      return Math.random() < 0.8 && T.length ? rndOf(T) : 'skip';
+      // No point jamming someone the family is killing tonight anyway.
+      if (claimant && !killPicks.has(claimant.id) && Math.random() < 0.7) return claimant.id;
+      return Math.random() < 0.8 && TK.length ? rndOf(TK) : 'skip';
     }
     if (role === 'framer') {
-      return suspLeader(2) || (T.length ? rndOf(T) : 'skip');   // pile evidence where eyes already are
+      return suspLeader(2, TK) || (TK.length ? rndOf(TK) : 'skip'); // pile evidence where eyes already are
     }
     if (role === 'poisoner') {
-      const fresh = T.filter(id => { const t = getPlayer(id); return t && t.poisonedNight === null; });
+      const fresh = TK.filter(id => { const t = getPlayer(id); return t && t.poisonedNight === null; });
       if (claimant && fresh.includes(claimant.id)) return claimant.id;
       return fresh.length ? rndOf(fresh) : 'skip';
     }
     if (role === 'forger') {
-      if (claimant && Math.random() < 0.6) return claimant.id;  // burn the detective's testimony
-      return Math.random() < 0.3 && T.length ? (mostTrusted() || rndOf(T)) : 'skip';
+      if (claimant && !killPicks.has(claimant.id) && Math.random() < 0.6) return claimant.id;
+      return Math.random() < 0.3 && TK.length ? (mostTrusted(TK) || rndOf(TK)) : 'skip';
     }
     if (role === 'cleaner') {
       const picks = killers().map(m => G.night.actions[m.id])
@@ -1686,6 +1705,14 @@ const Host = (() => {
     } else if (G.phase === 'day') {
       if (conn._chatDay !== G.dayNum) {
         conn._chatDay = G.dayNum;
+        // A poisoned bot begs for the doctor — its only chance of surviving.
+        if (p.poisonedNight !== null && teamOf(p) !== 'mafia' && Math.random() < 0.85) {
+          handleChat(p, rndOf([
+            'I’ve been POISONED. Doctor — I need you tonight or I’m dead.',
+            'Someone slipped me poison in the night. Doc, please… I don’t have long.',
+            'I’m poisoned! Whoever the doctor is, tonight it has to be me.',
+          ]));
+        }
         handleChat(p, botLine(p));
         // …and mutter strategy where only the family can hear.
         if (p.role && teamOf(p) === 'mafia' && Math.random() < 0.4) {
@@ -1770,6 +1797,7 @@ const Host = (() => {
   function roleInfoFor(p) {
     const info = [];
     if (p.recruited) info.push('🤝 You have been recruited — you now win with the mafia.');
+    if (p.alive && p.poisonedNight !== null) info.push('☠️ You are POISONED — unless the doctor heals you tonight, you die at dawn.');
     if (p.role === 'vigilante') {
       if (p.guilt) info.push('Your guilt has holstered your gun for good.');
       else if (p.bullets <= 0) info.push('No bullets left.');

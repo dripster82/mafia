@@ -81,7 +81,7 @@ const ROLES = {
   },
   poisoner: {
     id: 'poisoner', name: 'Poisoner', team: 'mafia', icon: '☠️',
-    desc: 'You are the Mafia Poisoner. You know the family and win when the mafia wins — but you don’t kill directly. Each night, poison one player outside the mafia: if the Doctor doesn’t heal them the following night, they die at dawn.',
+    desc: 'You are the Mafia Poisoner. You know the family and win when the mafia wins — but you don’t kill directly. Each night, poison one player outside the mafia. The victim is told they’ve been poisoned: if the Doctor doesn’t heal them the following night, they die at dawn. Only the death is announced.',
     nightPrompt: 'Choose someone to poison tonight',
   },
   consigliere: {
