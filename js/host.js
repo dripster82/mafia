@@ -30,6 +30,8 @@ const Host = (() => {
   };
   let phaseTimer = null; // auto-advance timeout for the current phase
   let lobbyBeacon = null; // periodic public-lobby announcement while listed
+  let lastAnnounce = 0;   // throttle join/leave-triggered announcements
+  let pendingAnnounce = null; // trailing announce when a change hits the throttle
   let voteCloseTimer = null; // short pause between the last vote and the verdict
   let verdictTimer = null;   // when the verdict screen moves on
 
@@ -148,6 +150,7 @@ const Host = (() => {
     if (!G || !roomCode) return;
     if (!closing && (G.phase !== 'lobby' || !settings.publicGame)) return;
     if (closing && !settings.publicGame) return;
+    lastAnnounce = Date.now();
     try {
       fetch(LOBBY_URL, {
         method: 'POST',
@@ -155,6 +158,9 @@ const Host = (() => {
           code: roomCode,
           host: hostName,
           players: G.players.filter(p => p.connected).length,
+          bots: G.players.filter(p => p.isBot).length,
+          names: G.players.filter(p => p.connected && !p.isBot)
+            .map(p => `${p.avatar || ''} ${p.name}`.trim()).slice(0, 8),
           closed: !!closing,
           ts: Date.now(),
         }),
@@ -1942,6 +1948,19 @@ const Host = (() => {
     G.players.forEach(p => send(p.id, { t: 'state', view: viewFor(p) }));
     render();
     saveSnapshot();
+    // Keep the public listing's names/counts fresh as the lobby changes:
+    // announce at most every 5s, but never drop the latest state — a change
+    // inside the throttle window schedules a trailing announcement.
+    if (G.phase === 'lobby' && settings.publicGame) {
+      const wait = 5000 - (Date.now() - lastAnnounce);
+      if (wait <= 0) announcePublic();
+      else {
+        clearTimeout(pendingAnnounce);
+        pendingAnnounce = setTimeout(() => {
+          if (G && G.phase === 'lobby' && settings.publicGame) announcePublic();
+        }, wait + 100);
+      }
+    }
   }
 
   /* The chat stream as one player sees it: everyone gets the main channel and

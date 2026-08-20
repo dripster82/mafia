@@ -51,10 +51,16 @@ const App = (() => {
       const list = Object.values(rooms).filter(r => !r.closed)
         .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 10);
       box.innerHTML = list.length
-        ? list.map(r => `<button class="btn vote-line public-room" data-code="${r.code}">
-            <span class="vote-voters">${Math.max(1, parseInt(r.players, 10) || 1)} waiting</span>
-            <span class="vote-target">${escText(String(r.host || 'Someone').slice(0, 16))}’s game · <strong>${r.code}</strong></span>
-          </button>`).join('')
+        ? list.map(r => {
+            const bots = Math.max(0, parseInt(r.bots, 10) || 0);
+            const names = (Array.isArray(r.names) ? r.names : []).slice(0, 8)
+              .map(n => escText(String(n).slice(0, 20)));
+            const who = `${names.join(', ') || 'waiting for players'}${bots ? ` · 🤖×${bots}` : ''}`;
+            return `<button class="btn vote-line public-room" data-code="${r.code}">
+              <span class="vote-voters">${who}</span>
+              <span class="vote-target">${escText(String(r.host || 'Someone').slice(0, 16))}’s game · <strong>${r.code}</strong></span>
+            </button>`;
+          }).join('')
         : '<p class="muted small-text">No public games right now. Host one and tick “🌐 Public game” — or join a private game with its code.</p>';
       box.querySelectorAll('[data-code]').forEach(b => {
         b.onclick = () => {
