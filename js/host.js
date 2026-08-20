@@ -723,7 +723,12 @@ const Host = (() => {
     const others = alivePlayers().filter(t => t.id !== p.id);
     const nonMafia = alivePlayers().filter(t => teamOf(t) !== 'mafia');
     const deadBodies = G.players.filter(t => !t.alive && !t.spectator && t.role);
-    const mk = list => list.map(t => ({ id: t.id, name: t.name, avatar: t.avatar }));
+    // Mafia-team players see who's already been poisoned when picking targets.
+    const seesPoison = p.role && teamOf(p) === 'mafia';
+    const mk = list => list.map(t => ({
+      id: t.id, avatar: t.avatar,
+      name: t.name + (seesPoison && t.alive && t.poisonedNight !== null ? ' ☠️' : ''),
+    }));
     const r = p.role;
 
     if (r === 'mafia' || r === 'don') {
@@ -927,9 +932,14 @@ const Host = (() => {
         }
       }
     });
+    let curedName = null;
     alivePlayers().forEach(p => {
       if (p.poisonedNight !== null && p.poisonedNight === G.dayNum - 1 && !deaths.has(p.id)) {
-        if (p.id === savedId) { p.poisonedNight = null; report(p, '💊 You woke feeling terrible — the doctor pulled you back from the brink.'); }
+        if (p.id === savedId) {
+          p.poisonedNight = null;
+          curedName = p.name;
+          report(p, '💊 You woke feeling terrible — the doctor pulled you back from the brink.');
+        }
         else if (!immune.has(p.id)) deaths.set(p.id, 'poison');
       }
     });
@@ -1089,8 +1099,9 @@ const Host = (() => {
       if (G.dayNum === 1) savedName = nameOf(savedId);
       addLog(savedName ? `${savedName} was attacked, but the doctor saved them!` : 'The doctor saved someone from an attack in the night!', true);
     }
+    if (curedName) addLog(`💊 The doctor saved ${curedName} from the poison!`, true);
     if (revivedName) addLog(`⚰️ A miracle at dawn — ${revivedName} has risen from the dead!`, true);
-    if (!killed.length && !woundedNames.length && !saved && !revivedName) {
+    if (!killed.length && !woundedNames.length && !saved && !revivedName && !curedName) {
       addLog(forced ? 'The night was ended early.' : 'The night passed quietly.');
     }
 
@@ -1106,6 +1117,7 @@ const Host = (() => {
       savedName,
       saved,
       revivedName,
+      curedName,
       mayorName,
     };
 
@@ -1841,6 +1853,7 @@ const Host = (() => {
         spectator: !!t.spectator,
         pledged: !!t.pledged,
         role: roleVisibleTo(p, t) && G.phase !== 'lobby' && t.role ? t.role : null,
+        poisoned: !!(p.role && teamOf(p) === 'mafia' && t.alive && t.poisonedNight !== null),
         causeOfDeath: t.alive ? null : t.causeOfDeath,
       })),
     };
@@ -1913,7 +1926,10 @@ const Host = (() => {
         targets: G.players.filter(t => !t.spectator).map(t => ({
           id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id,
           dead: !t.alive, causeOfDeath: t.alive ? null : t.causeOfDeath,
-          role: !t.alive && roleVisibleTo(p, t) && t.role ? t.role : null,
+          // Roles show wherever the viewer may see them (own team for the
+          // mafia, the public mayor, the dead when reveals are on).
+          role: roleVisibleTo(p, t) && t.role ? t.role : null,
+          poisoned: !!(p.role && teamOf(p) === 'mafia' && t.alive && t.poisonedNight !== null),
         })),
       };
       view.chat = chatFor(p);

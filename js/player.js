@@ -358,10 +358,11 @@ const Player = (() => {
         const dead = !p.alive
           ? `<span class="status">${p.spectator ? '👁 spectating' : deadLabel[p.causeOfDeath] || 'killed'}</span>` : '';
         const mayorBadge = p.pledged && p.alive ? '<span class="status">🎖 Mayor</span>' : '';
+        const poisonBadge = p.poisoned ? '<span class="status">☠️ poisoned</span>' : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
           <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
-          ${mayorBadge}${role}${votes}${dead}</div>`;
+          ${mayorBadge}${poisonBadge}${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
   }
@@ -373,7 +374,7 @@ const Player = (() => {
     const deadLabels = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding', mafia: 'killed' };
     const rows = v.targets.map(t => ({
       id: t.id, self: t.self, dead: t.dead, causeOfDeath: t.causeOfDeath, role: t.role,
-      label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}`,
+      label: `${t.avatar || ''} ${esc(t.name)}${t.self ? ' (you)' : ''}${t.poisoned ? ' ☠️' : ''}`,
     }));
     if (opts.includeNobody) rows.push({ id: 'nobody', label: '🕊 No one' });
     return `<div class="target-grid">${
@@ -387,8 +388,9 @@ const Player = (() => {
             <span class="vote-target">${roleTag}${t.label}</span>
           </div>`;
         }
+        const roleIcon = t.role ? `${ROLES[t.role].icon} ` : '';
         const inner = `<span class="vote-voters">${votersHere || '&nbsp;'}</span>
-          <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${t.label}</span>`;
+          <span class="vote-target">${count ? `<span class="vote-count">${count}</span>` : ''}${roleIcon}${t.label}</span>`;
         return (t.self || opts.readonly)
           ? `<div class="btn vote-line self-row">${inner}</div>`
           : `<button class="btn vote-line ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
@@ -457,6 +459,8 @@ const Player = (() => {
           k.role ? ` — they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`
                  : reveal ? ' — their body was left unrecognisable. 🧹' : '.'}`);
       });
+      if (a.curedName) parts.push(
+        `💊 The doctor saved <strong>${esc(a.curedName)}</strong> from the poison!`);
       if (a.woundedNames && a.woundedNames.length) parts.push(
         `<strong>${a.woundedNames.map(esc).join(' and ')}</strong> ${a.woundedNames.length > 1 ? 'were' : 'was'} wounded in the night — but survived!`);
       if (a.savedName) parts.push(`<strong>${esc(a.savedName)}</strong> was attacked, but the doctor saved them!`);
