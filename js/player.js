@@ -365,7 +365,7 @@ const Player = (() => {
         const poisonBadge = p.poisoned ? '<span class="status">☠️ poisoned</span>' : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
-          <span class="name">${p.avatar || ''} ${esc(p.name)}${p.id === view.you.id ? ' (you)' : ''}</span>
+          <span class="name">${p.avatar || ''} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' (you)' : ''}</span>
           ${mayorBadge}${poisonBadge}${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
@@ -405,6 +405,7 @@ const Player = (() => {
         // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
         const who = `<span class="vote-who"><span>${t.avatar || ''}</span>
           <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
+          ${t.isBot ? '<span class="bot-tag">🤖</span>' : ''}
           ${t.poisoned ? '<span>☠️</span>' : ''}
           ${t.role ? `<span class="vote-roleic">${ROLES[t.role].icon}</span>` : ''}</span>`;
         const pill = t.dead
@@ -428,7 +429,7 @@ const Player = (() => {
         view.chat.length
           ? view.chat.map(m => m.divider
               ? `<div class="chat-divider">—— ${esc(m.divider)} ——</div>`
-              : `<div class="chat-msg${m.chan === 'ghost' ? ' chat-ghost' : ''}"><span class="chat-who">${m.chan === 'ghost' ? '👻 ' : ''}${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+              : `<div class="chat-msg${m.chan === 'ghost' ? ' chat-ghost' : ''}"><span class="chat-who">${m.chan === 'ghost' ? '👻 ' : ''}${m.avatar || ''} ${esc(m.name)}${m.bot ? '<span class="bot-tag">🤖</span>' : ''}</span> ${esc(m.text)}</div>`).join('')
           : '<p class="muted small-text">No one has said anything yet…</p>'
       }</div>
       ${view.canChat ? `<div class="chat-row">
@@ -444,7 +445,7 @@ const Player = (() => {
     return `<div class="card"><h3>🔪 Family chat</h3>
       <div id="mchat-log" class="chat-log chat-log-mafia">${
         view.mafiaChat.length
-          ? view.mafiaChat.map(m => `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+          ? view.mafiaChat.map(m => `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}${m.bot ? '<span class="bot-tag">🤖</span>' : ''}</span> ${esc(m.text)}</div>`).join('')
           : '<p class="muted small-text">The family is quiet…</p>'
       }</div>
       <div class="chat-row">
@@ -708,7 +709,7 @@ const Player = (() => {
       const n = view.night;
       if (n.mates && n.mates.length) {
         html += `<div class="card"><h3>🔪 Your family</h3>${
-          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)} <span class="muted">(${esc(m.role)})</span> — ${
+          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)}${m.isBot ? ' <span class="bot-tag">🤖</span>' : ''} <span class="muted">(${esc(m.role)})</span> — ${
             m.pick ? `targeting <strong>${esc(m.pick)}</strong>` : '<span class="muted">deciding…</span>'}</p>`).join('')
         }<p class="hint">Killers should agree on one target — a split vote picks randomly among the top choices.</p></div>`;
       }

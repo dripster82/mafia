@@ -333,6 +333,7 @@ const Host = (() => {
       : (G.phase === 'day' || G.phase === 'lobby');
     if (!phaseOk) return;
     G.chat.push(Object.assign({ name: p.name, avatar: p.avatar, text },
+      p.isBot ? { bot: true } : {},
       chan === 'main' ? {} : { chan }));
     if (G.chat.length > 250) G.chat = G.chat.slice(-250);
     // Only public day talk sways the table (and holds the bots' votes open).
@@ -1637,7 +1638,15 @@ const Host = (() => {
     };
     handleJoin(conn, { t: 'join', name });
     const bot = getPlayer(conn._playerId);
-    if (bot) { bot.avatar = '🤖'; bot.isBot = true; broadcast(); }
+    if (bot) {
+      // Bots get a proper animal face like everyone else — a small 🤖 tag in
+      // the UI marks them, so who's talking stays readable.
+      const used = new Set(G.players.map(p => p.avatar));
+      const free = AVATARS.filter(a => !used.has(a));
+      bot.avatar = free.length ? rndOf(free) : rndOf(AVATARS);
+      bot.isBot = true;
+      broadcast();
+    }
   }
 
   /* One pending timer per bot, delay chosen for the current phase; the wait
@@ -2072,6 +2081,7 @@ const Host = (() => {
         id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
         spectator: !!t.spectator,
         pledged: !!t.pledged,
+        isBot: !!t.isBot,
         role: roleVisibleTo(p, t) && G.phase !== 'lobby' && t.role ? t.role : null,
         poisoned: !!(p.role && teamOf(p) === 'mafia' && t.alive && t.poisonedNight !== null),
         causeOfDeath: t.alive ? null : t.causeOfDeath,
@@ -2101,7 +2111,7 @@ const Host = (() => {
         skipLabel: ui && ui.skipLabel ? ui.skipLabel : '🕊 Skip',
         mates: teamOf(p) === 'mafia'
           ? aliveMafia().filter(m => m.id !== p.id).map(m => ({
-              name: m.name, avatar: m.avatar, role: ROLES[m.role].name,
+              name: m.name, avatar: m.avatar, isBot: !!m.isBot, role: ROLES[m.role].name,
               pick: G.night.actions[m.id] && G.night.actions[m.id] !== 'skip' && !['pledge', 'hide', 'clean'].includes(G.night.actions[m.id])
                 ? nameOf(G.night.actions[m.id]) : null,
             }))
@@ -2149,6 +2159,7 @@ const Host = (() => {
         // day screen shows who's already gone.
         targets: G.players.filter(t => !t.spectator).map(t => ({
           id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id,
+          isBot: !!t.isBot,
           dead: !t.alive, causeOfDeath: t.alive ? null : t.causeOfDeath,
           // Roles show wherever the viewer may see them (own team for the
           // mafia, the public mayor, the dead when reveals are on).
@@ -2258,7 +2269,7 @@ const Host = (() => {
           <div class="player-list">${G.players.map(p => `
             <div class="player-row">
               <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-              <span class="name">${p.avatar || ''} ${esc(p.name)}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
+              <span class="name">${p.avatar || ''} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
               ${localConn && p.id === localConn._playerId ? '' : `<button class="btn small ghost" data-kick="${p.id}">✕</button>`}
             </div>`).join('')}</div>
           <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
