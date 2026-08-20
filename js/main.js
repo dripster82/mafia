@@ -59,7 +59,8 @@ const App = (() => {
       box.querySelectorAll('[data-code]').forEach(b => {
         b.onclick = () => {
           el('join-code').value = b.dataset.code;
-          el('join-name').focus();
+          const n = el('join-name');
+          if (n.value.trim()) el('btn-join').focus(); else n.focus();
         };
       });
     } catch (e) {
@@ -131,7 +132,7 @@ const App = (() => {
       el('join-error').classList.add('hidden');
       showScreen('join');
       watchPublicGames();
-      el('join-code').focus();
+      el('join-name').focus();
     };
     el('btn-refresh-public').onclick = loadPublicGames;
 
@@ -140,8 +141,8 @@ const App = (() => {
     });
 
     el('btn-join').onclick = doJoin;
-    el('join-name').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); });
-    el('join-code').addEventListener('keydown', e => { if (e.key === 'Enter') el('join-name').focus(); });
+    el('join-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('join-code').focus(); });
+    el('join-code').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); });
 
     function doJoin() {
       const code = el('join-code').value.trim().toUpperCase();

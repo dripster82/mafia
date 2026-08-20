@@ -167,6 +167,17 @@ const Host = (() => {
     lobbyBeacon = setInterval(() => announcePublic(), 25000);
   }
 
+  // If the host's tab closes while publicly listed, withdraw the listing on
+  // the way out (sendBeacon is built for unload); a hard crash still falls
+  // back to the 90-second age-out on the join page.
+  window.addEventListener('pagehide', () => {
+    try {
+      if (G && G.phase === 'lobby' && settings.publicGame && roomCode && navigator.sendBeacon) {
+        navigator.sendBeacon(LOBBY_URL, JSON.stringify({ code: roomCode, closed: true, ts: Date.now() }));
+      }
+    } catch (e) {}
+  });
+
   /* ---------------- crash/reload insurance ----------------
    * Every broadcast snapshots the whole game to localStorage; if the host's
    * browser reloads mid-game, the home screen offers to resume: same room
