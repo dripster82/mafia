@@ -2195,6 +2195,8 @@ const Host = (() => {
           ${roomCode ? App.qrSvgFor(roomCode) : ''}
           <div class="muted small-text">Scan to join, or open</div>
           <div class="url">${roomCode ? esc(App.joinLinkFor(roomCode)) : ''}</div>
+          <label class="opt" style="justify-content:center;margin-top:10px"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
+            🌐 Public game — anyone can find this room on the join page</label>
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
@@ -2213,8 +2215,6 @@ const Host = (() => {
           Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
         </div>
         <div class="card"><h3>Game options</h3>
-          <label class="opt"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
-            🌐 Public game — list this lobby on the join page so anyone can find and join</label>
           <label class="opt"><input type="checkbox" id="opt-safe-night" ${settings.safeFirstNight ? 'checked' : ''}>
             No deaths on the first night — the victim is only wounded</label>
           <label class="opt">Max mafia:
