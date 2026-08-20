@@ -408,10 +408,12 @@ const Host = (() => {
       }
     });
     // Bots answer when spoken to (questions, greetings, or just their name).
+    // A human addressing a bot almost always gets an answer; bot-to-bot
+    // chatter stays throttled so they don't spiral.
     mentioned.filter(t => t.isBot && t.alive).forEach(bot => {
       if (accuse && !defend && !/\?/.test(lower)) return; // flat accusations get the defense path below
-      if (Date.now() - (bot.lastReplyAt || 0) < 8000) return;
-      if (Math.random() > 0.75) return;
+      if (Date.now() - (bot.lastReplyAt || 0) < (speaker.isBot ? 8000 : 4000)) return;
+      if (Math.random() > (speaker.isBot ? 0.75 : 0.95)) return;
       bot.lastReplyAt = Date.now();
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !bot.alive) return;
@@ -421,16 +423,21 @@ const Host = (() => {
 
     if (!mentioned.length || defend || !accuse) { maybeReconsiderVotes(); return; }
 
-    // Accused bots defend themselves (once per day)…
+    // Accused bots defend themselves — reliably against a human's finger
+    // (up to twice a day, the second time exasperated), less so to bot noise.
     mentioned.filter(t => t.isBot && t.alive).forEach(t => {
       if (/\?/.test(lower)) return; // questions were answered above, not defended against
-      if (t.defendedDay === G.dayNum || Math.random() > 0.6) return;
-      t.defendedDay = G.dayNum;
+      const n = t.defendCount && t.defendCount.day === G.dayNum ? t.defendCount.n : 0;
+      if (n >= 2) return;
+      if (Math.random() > (speaker.isBot ? 0.6 : 0.95)) return;
+      t.defendCount = { day: G.dayNum, n: n + 1 };
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !t.alive) return;
         const line = t.role === 'jester'
           ? rndOf(['Yes!! I mean… no? Definitely no. 😏', 'Guilty! Of being charming. Nothing else.'])
-          : rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…', 'Me?! I’ve been helping this whole time!']);
+          : n === 0
+            ? rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…', 'Me?! I’ve been helping this whole time!'])
+            : rndOf(['I already TOLD you — it isn’t me.', 'Still on me? Fine. Vote, and see what it costs you.', 'Ask anyone. I’m clean. Look at who’s pointing instead.']);
         handleChat(t, line);
       }, 1500 + Math.random() * 2500);
     });
@@ -1282,18 +1289,30 @@ const Host = (() => {
     });
 
     // Day 1 gives the table almost nothing to go on — a rumour seeds the talk.
+    // It's real intel, fuzzed: 70% of the time it names someone who genuinely
+    // left their house tonight (mafia, doctor, any visitor — the rumour can't
+    // tell them apart), 30% a red herring who stayed home.
     let rumour = null;
     if (G.dayNum === 1 && alivePlayers().length) {
-      const t = rndOf(alivePlayers());
-      rumour = rndOf([
-        'Someone was seen slipping through the alleys long after midnight…',
-        `Old Mrs. Whittle swears she heard floorboards creaking near ${t.name}'s place last night.`,
-        `A dog barked half the night outside ${t.name}'s window. Dogs know things.`,
-        'Muddy footprints by the well this morning. Fresh ones.',
-        `${t.name} was up awfully late — their lamp was still burning at three.`,
-        'The chapel door was found unlatched at dawn. Nobody will say why.',
-      ]);
-      addLog(`🗣 Rumour: ${rumour}`);
+      const outIds = [...new Set(visits.map(x => x.visitor))]
+        .filter(id => { const pl = getPlayer(id); return pl && pl.alive; });
+      const homeIds = alivePlayers().filter(pl => !outIds.includes(pl.id)).map(pl => pl.id);
+      const pool = (outIds.length && (Math.random() < 0.7 || !homeIds.length)) ? outIds
+        : (homeIds.length ? homeIds : outIds);
+      if (pool.length) {
+        const t = getPlayer(rndOf(pool));
+        rumour = rndOf([
+          `Old Mrs. Whittle swears she saw ${t.name} out on the street long after midnight.`,
+          `${t.name}'s door creaked twice in the night — once going out, once coming back.`,
+          `The baker was up before dawn and spotted ${t.name} crossing the square.`,
+          `Muddy boots on ${t.name}'s porch this morning. They weren't there yesterday.`,
+          `${t.name}'s lamp went dark at dusk… then someone lit it again at three.`,
+        ]);
+        addLog(`🗣 Rumour: ${rumour}`);
+        // The table hears it too — a soft nudge, scaled by each bot's credulity.
+        alivePlayers().filter(b => b.isBot && b.id !== t.id).forEach(b => bumpFor(b, t.id, 1));
+        heatUp(t, 1);
+      }
     }
 
     G.announce = {
