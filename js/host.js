@@ -17,6 +17,8 @@ const Host = (() => {
   let settings = {
     safeFirstNight: true, maxMafia: 1, showVoters: true, noSelfHeal: false,
     ghostVote: false,
+    lastWords: true,     // eliminated players leave last words (the Forger needs this)
+    revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need this)
     nightTimer: 120, dayTimer: 300,
     roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
              tracker: false, coroner: false, bookkeeper: false, mayor: false,
@@ -294,6 +296,7 @@ const Host = (() => {
    * inverted, vote-blocs with the mafia look dirty, and anyone who claimed
    * the dead player's role stands exposed as a liar. */
   function reassessOnDeath(dead) {
+    if (!settings.revealOnDeath) return; // roles stay secret — nothing to learn
     if (!dead || !dead.role || dead.cleaned) return; // cleaned bodies teach nothing
     const bots = G.players.filter(b => b.isBot && b.alive);
     if (!bots.length) return;
@@ -1057,7 +1060,7 @@ const Host = (() => {
     // Public log lines.
     killed.forEach(k => {
       const how = k.cause === 'vigilante' ? 'was shot' : k.cause === 'poison' ? 'succumbed to poison' : k.cause === 'guard' ? 'took a bullet meant for someone else' : 'was killed';
-      addLog(`${k.name} ${how} in the night.${k.role ? ` They were the ${ROLES[k.role].name}.` : ' Their body was unrecognisable.'}`, true);
+      addLog(`${k.name} ${how} in the night.${!settings.revealOnDeath ? '' : k.role ? ` They were the ${ROLES[k.role].name}.` : ' Their body was unrecognisable.'}`, true);
     });
     if (woundedNames.length) addLog(`${woundedNames.join(' and ')} ${woundedNames.length > 1 ? 'were' : 'was'} wounded in the night, but survived!`, true);
     let savedName = null;
@@ -1190,7 +1193,7 @@ const Host = (() => {
         eliminated = getPlayer(top[0]);
         eliminated.alive = false;
         eliminated.causeOfDeath = 'vote';
-        addLog(`The village ganged up on ${eliminated.name} (${max}/${castWeight} votes) — they were the ${ROLES[eliminated.role].name}.`, true);
+        addLog(`The village ganged up on ${eliminated.name} (${max}/${castWeight} votes)${settings.revealOnDeath ? ` — they were the ${ROLES[eliminated.role].name}` : ''}.`, true);
       } else {
         noMajority = true;
         addLog('No majority was reached — no one was eliminated.');
@@ -1226,18 +1229,19 @@ const Host = (() => {
 
     G.phase = 'verdict';
     G.lastWords = null;
-    G.lastWordsDone = false;
+    G.lastWordsDone = !settings.lastWords; // last words disabled → nothing to wait for
     setPhaseTimer(0);
     broadcast();
 
     // How the verdict ends: no elimination → short pause; a bot → after its
     // line lands; a human → wait for their last words (say-nothing button or
     // a 60s safety net if they've gone quiet).
-    if (!eliminated) scheduleVerdictEnd(5000);
+    if (!settings.lastWords) scheduleVerdictEnd(eliminated ? 6000 : 5000);
+    else if (!eliminated) scheduleVerdictEnd(5000);
     else if (eliminated.isBot) scheduleVerdictEnd(15000);
     else scheduleVerdictEnd(60000);
 
-    if (eliminated && eliminated.isBot && !eliminated.forged) {
+    if (settings.lastWords && eliminated && eliminated.isBot && !eliminated.forged) {
       const LAST_WORDS = {
         detective: ['I was the DETECTIVE, you fools! My notes… check my notes…', 'You’ve doomed us all — I was so close!'],
         doctor: ['Who’s going to patch you up now?', 'I saved your lives, and THIS is the thanks I get?'],
@@ -1254,10 +1258,14 @@ const Host = (() => {
       const TOWN_WORDS = ['I was innocent, you monsters… avenge me!', 'You’ll regret this when the mafia gets you all!',
                           'I told you it wasn’t me…', 'Wrong person, geniuses.', 'My conscience is clean — can you say the same?',
                           'Remember me when the mafia comes knocking.', 'No hard feelings. (Some hard feelings.)'];
-      const pool = teamOf(eliminated) === 'mafia'
-        ? MAFIA_WORDS
-        : [...(LAST_WORDS[eliminated.role] || []), ...TOWN_WORDS];
-      const line = rndOf(LAST_WORDS[eliminated.role] && Math.random() < 0.6 ? LAST_WORDS[eliminated.role] : pool);
+      // With roles hidden on death, everyone protests their innocence — a
+      // role-revealing line would spill what the setting keeps secret.
+      const hideRole = !settings.revealOnDeath && eliminated.role !== 'jester';
+      const pool = hideRole ? TOWN_WORDS
+        : teamOf(eliminated) === 'mafia'
+          ? MAFIA_WORDS
+          : [...(LAST_WORDS[eliminated.role] || []), ...TOWN_WORDS];
+      const line = rndOf(!hideRole && LAST_WORDS[eliminated.role] && Math.random() < 0.6 ? LAST_WORDS[eliminated.role] : pool);
       setTimeout(() => {
         if (G && G.phase === 'verdict' && !G.lastWords && G.announce.eliminatedId === eliminated.id) {
           G.lastWords = line;
@@ -1292,6 +1300,7 @@ const Host = (() => {
   /* One final message from a just-eliminated player, shown during the verdict.
    * The Forger's mark destroys it. */
   function handleLastWords(p, text) {
+    if (!settings.lastWords) return;
     if (G.phase !== 'verdict' || G.lastWords || G.lastWordsDone) return;
     if (!G.announce || G.announce.eliminatedId !== p.id) return;
     if (text === '__skip__') {
@@ -1701,11 +1710,22 @@ const Host = (() => {
     render();
   }
 
+  /* The public announcement, with roles stripped when they stay secret on death. */
+  function maskedAnnounce() {
+    const a = G.announce;
+    if (!a || settings.revealOnDeath || G.phase === 'ended') return a;
+    if (a.kind === 'dawn') {
+      return Object.assign({}, a, { killed: (a.killed || []).map(k => Object.assign({}, k, { role: null })) });
+    }
+    if (a.kind === 'verdict') return Object.assign({}, a, { eliminatedRole: null });
+    return a;
+  }
+
   function roleVisibleTo(viewer, target) {
     if (G.phase === 'ended') return true;
     if (viewer && viewer.id === target.id) return true;
     if (target.cleaned) return false; // the Cleaner scrubbed this body
-    if (!target.alive) return true;
+    if (!target.alive && settings.revealOnDeath) return true;
     if (target.pledged) return true;  // the Mayor went public
     if (viewer && teamOf(viewer) === 'mafia' && teamOf(target) === 'mafia' && G.phase !== 'lobby') return true;
     return false;
@@ -1739,11 +1759,12 @@ const Host = (() => {
       dayNum: G.dayNum,
       minPlayers: MIN_PLAYERS,
       winner: G.winner,
-      announce: G.announce,
+      announce: maskedAnnounce(),
       roleSummary: G.players.length >= MIN_PLAYERS ? roleSummary(G.players.length, deckOpts()) : null,
       settings: {
         safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
         noSelfHeal: settings.noSelfHeal, nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
+        lastWords: settings.lastWords, revealOnDeath: settings.revealOnDeath,
         extraRoles: Object.keys(settings.roles).filter(r => settings.roles[r]),
       },
       timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
@@ -1887,6 +1908,14 @@ const Host = (() => {
     }</div></div>`;
   }
 
+  // Roles that only work when a certain game option is on. Ticking the role
+  // turns the option on; turning the option off unticks the role.
+  const ROLE_NEEDS = {
+    forger: { setting: 'lastWords', label: 'needs “last words” on' },
+    coroner: { setting: 'revealOnDeath', label: 'needs “reveal roles on death” on' },
+    bookkeeper: { setting: 'revealOnDeath', label: 'needs “reveal roles on death” on' },
+  };
+
   const ROLE_GROUPS = [
     { title: '🏘 Village', roles: ['bodyguard', 'vigilante', 'watcher', 'tracker', 'coroner', 'bookkeeper', 'mayor', 'mortician'] },
     { title: '🔪 Mafia', roles: ['don', 'fixer', 'framer', 'poisoner', 'consigliere', 'forger', 'cleaner', 'recruiter'] },
@@ -1939,6 +1968,10 @@ const Host = (() => {
             Doctor can't protect themselves</label>
           <label class="opt"><input type="checkbox" id="opt-ghost-vote" ${settings.ghostVote ? 'checked' : ''}>
             👻 The dead get one last vote — usable on any later day</label>
+          <label class="opt"><input type="checkbox" id="opt-last-words" ${settings.lastWords ? 'checked' : ''}>
+            🪦 Eliminated players leave last words <span class="muted small-text">(the Forger needs this on)</span></label>
+          <label class="opt"><input type="checkbox" id="opt-reveal-death" ${settings.revealOnDeath ? 'checked' : ''}>
+            Reveal a player's role when they die <span class="muted small-text">(the Coroner and Bookkeeper need this on)</span></label>
           <label class="opt">Night timer:
             <select id="opt-night-timer">${[[0, 'No limit'], [60, '1 min'], [120, '2 min'], [180, '3 min'], [300, '5 min']].map(([v, l]) =>
               `<option value="${v}" ${settings.nightTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -1954,7 +1987,7 @@ const Host = (() => {
           ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:10px 0 2px">${g.title}</p>` +
             g.roles.map(r => `
               <label class="opt opt-role"><input type="checkbox" data-role-opt="${r}" ${settings.roles[r] ? 'checked' : ''}>
-                <span><strong>${ROLES[r].icon} ${ROLES[r].name}</strong><br>
+                <span><strong>${ROLES[r].icon} ${ROLES[r].name}</strong>${ROLE_NEEDS[r] ? ` <span class="muted small-text">⚙️ ${ROLE_NEEDS[r].label}</span>` : ''}<br>
                 <span class="muted small-text">${esc(ROLES[r].desc)}</span></span></label>`).join('')
           ).join('')}
         </div>`;
@@ -2026,12 +2059,30 @@ const Host = (() => {
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
     const ogv = el('opt-ghost-vote');
     if (ogv) ogv.onchange = () => { settings.ghostVote = ogv.checked; broadcast(); };
+    const olw = el('opt-last-words');
+    if (olw) olw.onchange = () => {
+      settings.lastWords = olw.checked;
+      if (!olw.checked) settings.roles.forger = false; // the Forger has nothing to burn
+      broadcast();
+    };
+    const ord = el('opt-reveal-death');
+    if (ord) ord.onchange = () => {
+      settings.revealOnDeath = ord.checked;
+      if (!ord.checked) { settings.roles.coroner = false; settings.roles.bookkeeper = false; }
+      broadcast();
+    };
     const ont = el('opt-night-timer');
     if (ont) ont.onchange = () => { settings.nightTimer = parseInt(ont.value, 10) || 0; broadcast(); };
     const odt = el('opt-day-timer');
     if (odt) odt.onchange = () => { settings.dayTimer = parseInt(odt.value, 10) || 0; broadcast(); };
     c.querySelectorAll('[data-role-opt]').forEach(cb => {
-      cb.onchange = () => { settings.roles[cb.dataset.roleOpt] = cb.checked; broadcast(); };
+      cb.onchange = () => {
+        const r = cb.dataset.roleOpt;
+        settings.roles[r] = cb.checked;
+        // A role that depends on a game option drags that option on with it.
+        if (cb.checked && ROLE_NEEDS[r]) settings[ROLE_NEEDS[r].setting] = true;
+        broadcast();
+      };
     });
   }
 

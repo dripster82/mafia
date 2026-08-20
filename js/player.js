@@ -436,9 +436,10 @@ const Player = (() => {
       (a.killed || []).forEach(k => {
         const how = k.cause === 'vigilante' ? 'was shot' : k.cause === 'poison' ? 'succumbed to poison'
           : k.cause === 'guard' ? 'took a bullet meant for someone else' : 'was killed';
-        parts.push(`<strong>${esc(k.name)}</strong> ${how} in the night — ${
-          k.role ? `they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`
-                 : 'their body was left unrecognisable. 🧹'}`);
+        const reveal = !view.settings || view.settings.revealOnDeath !== false;
+        parts.push(`<strong>${esc(k.name)}</strong> ${how} in the night${
+          k.role ? ` — they were the <strong>${ROLES[k.role].icon} ${ROLES[k.role].name}</strong>.`
+                 : reveal ? ' — their body was left unrecognisable. 🧹' : '.'}`);
       });
       if (a.woundedNames && a.woundedNames.length) parts.push(
         `<strong>${a.woundedNames.map(esc).join(' and ')}</strong> ${a.woundedNames.length > 1 ? 'were' : 'was'} wounded in the night — but survived!`);
@@ -454,8 +455,8 @@ const Player = (() => {
     }
     if (view.phase === 'night' && a.kind === 'verdict' && view.dayNum > 1) {
       if (a.eliminatedName) {
-        return `<div class="banner death"><p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> —
-          they were the <strong>${ROLES[a.eliminatedRole].name}</strong>.</p></div>`;
+        return `<div class="banner death"><p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> — ${
+          a.eliminatedRole ? `they were the <strong>${ROLES[a.eliminatedRole].name}</strong>` : 'they were eliminated'}.</p></div>`;
       }
       return `<div class="banner day"><p>${a.tied ? 'The vote was tied — no one was eliminated.'
         : a.noMajority ? 'No majority was reached — no one was eliminated.'
@@ -491,7 +492,9 @@ const Player = (() => {
         ${view.roleSummary ? `<p class="muted small-text">Roles in play: ${esc(view.roleSummary)}</p>` : ''}
         ${view.settings ? `<p class="muted small-text">First night: ${view.settings.safeFirstNight ? 'no deaths' : 'normal'} ·
           Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}
-          ${view.settings.noSelfHeal ? ' · Doctor: no self-heal' : ''}<br>
+          ${view.settings.noSelfHeal ? ' · Doctor: no self-heal' : ''}
+          ${view.settings.lastWords === false ? ' · No last words' : ''}
+          ${view.settings.revealOnDeath === false ? ' · Roles stay secret on death' : ''}<br>
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
       html += profileCardHTML();
@@ -514,8 +517,9 @@ const Player = (() => {
         html += `<div class="banner death"><span class="big-emoji">⚖️</span>
           <h2>The village has spoken</h2>
           <p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> — they were eliminated.</p>
-          <p><strong>${esc(a.eliminatedName)}</strong> was the
-            <strong>${ROLES[a.eliminatedRole].icon} ${ROLES[a.eliminatedRole].name}</strong>.</p>
+          ${a.eliminatedRole ? `<p><strong>${esc(a.eliminatedName)}</strong> was the
+            <strong>${ROLES[a.eliminatedRole].icon} ${ROLES[a.eliminatedRole].name}</strong>.</p>`
+          : `<p class="muted">Their role goes with them to the grave.</p>`}
           ${you ? '<p><strong>That’s you — you’re out. 👻</strong></p>' : ''}</div>`;
       } else {
         html += `<div class="banner day"><span class="big-emoji">🕊</span>
