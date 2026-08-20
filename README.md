@@ -20,7 +20,9 @@ host except to the player who owns them.
 6. Repeat until the town eliminates all mafia, or the mafia equal the rest of the town — with the Jester, Executioner, and Drifter chasing their own wins on the side.
 
 Roles stay hidden until a player dies or the game ends — including from the
-host, who plays like everyone else (mafia members always see each other).
+host, who plays like everyone else. Mafia members always see each other's
+role icons (in the vote list, players list, and night panel), along with a
+☠️ mark on anyone currently poisoned.
 The host's screen adds a small controls panel (start, force-advance for stuck
 players, kick in the lobby, play again) showing only public information.
 
@@ -28,10 +30,12 @@ players, kick in the lobby, play again) showing only public information.
 
 ### Public games
 
-Hosts can tick **🌐 Public game** in the lobby to list the room on the join
-page, where anyone on the same site can see it ("Paul's game · 3 waiting") and
-join with one tap. Games are private by default; listings withdraw when the
-game starts and fade out within ~90 seconds if the host disappears.
+Hosts can tick **🌐 Public game** (right under the room code and QR) to list
+the room on the join page, where anyone on the same site sees who's waiting
+("🦊 Paul, 🐸 Zoe · 🤖×3") and joins with one tap. Games are private by
+default; listings refresh within seconds as the lobby changes, withdraw the
+moment the game starts or the host's tab closes, and fade out within ~90
+seconds after a hard crash.
 
 The directory is a topic on [ntfy.sh](https://ntfy.sh) (a free, open pub/sub
 service) — no accounts or keys. The topic name is derived from the site's
@@ -107,16 +111,20 @@ turning the setting away unticks the roles.
 Core: 🔪 Mafia, 💉 Doctor, 🔍 Detective, 🧑‍🌾 Villager. The host can enable
 extra roles per game:
 
-- **Village:** 🛡️ Bodyguard (dies in the target's place), 🔫 Vigilante (two
+- **Village:** 🛡️ Bodyguard (dies in the target's place — and always learns
+  when they took a hit, even if the Doctor saved them), 🔫 Vigilante (two
   bullets from Night 2; killing town holsters the gun), 🪟 Watcher (sees who
   visited someone), 👣 Tracker (sees who someone visited), 🔬 Coroner (reads
   a body's true role), 📒 Bookkeeper (nightly count of living mafia),
   🎖️ Mayor (go public once: proven village, double vote), ⚰️ Mortician
-  (raise one dead villager).
+  (raise one dead villager — the ritual completes even if the Mortician is
+  killed that same night, and a failed ritual is always reported).
 - **Mafia:** 🎩 Don (reads innocent to the Detective), 🔧 Fixer (blocks a
-  night action), 🖼️ Framer (frames someone as mafia), ☠️ Poisoner (the victim
-  is told they're poisoned and dies the next dawn unless the Doctor heals
-  them; only the death is announced), 🧠 Consigliere (learns exact roles),
+  night action — blocked players are told, and the recap marks it), 🖼️ Framer
+  (frames someone as mafia), ☠️ Poisoner (the victim is told they're poisoned
+  and dies the next dawn unless the Doctor heals them; only the death is
+  announced — but a cure is: "The doctor saved X from the poison!"),
+  🧠 Consigliere (learns exact roles),
   ✒️ Forger (destroys last words, twice), 🧹 Cleaner (hides a victim's role,
   twice), 🤝 Recruiter (turns a villager once).
 - **Neutral:** 🃏 Jester (wins by being voted out), 🪓 Executioner (wins if

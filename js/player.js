@@ -851,8 +851,14 @@ const Player = (() => {
     const prevMChat = document.getElementById('mchat-input');
     const mchatFocused = prevMChat && document.activeElement === prevMChat;
     const mchatSel = mchatFocused ? prevMChat.selectionStart : 0;
+    // The role guide must not jump to the top when a broadcast re-renders.
+    const prevGuide = c.querySelector('.guide-panel');
+    const guideScroll = prevGuide ? prevGuide.scrollTop : 0;
 
     c.innerHTML = html;
+
+    const gp = c.querySelector('.guide-panel');
+    if (gp && guideScroll) gp.scrollTop = guideScroll;
 
     const sendChat = () => {
       const ci = el('chat-input');
