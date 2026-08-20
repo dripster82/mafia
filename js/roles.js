@@ -157,7 +157,7 @@ const PEER_OPTS = {
 /* Avatars players can pick in the lobby. */
 const AVATARS = ['🦊', '🐻', '🐼', '🐸', '🐯', '🦁', '🐮', '🐷',
                  '🐨', '🐰', '🦉', '🦄', '🐙', '🦈', '🐺', '🐝',
-                 '🦋', '🐢', '🐳', '🦅', '🐴', '🐲', '👻', '🎃'];
+                 '🦋', '🐢', '🐳', '🦅', '🐴', '🐲', '🦔', '🎃']; // no 👻 — that marks the dead
 
 /* Number of mafia for a given player count; maxMafia (0 = auto) caps it. */
 function mafiaCount(n, maxMafia) {

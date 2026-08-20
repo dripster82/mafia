@@ -21,6 +21,7 @@ const Player = (() => {
   let toastTimer = null;
   let chatDraft = '';              // in-progress chat message, survives re-renders
   let mafiaDraft = '';             // in-progress family-chat message
+  let profileSavedFlash = 0;       // "✓ Saved" flash survives re-renders
   let phaseTickInterval = null;    // 1s countdown updater for the phase timer
   let lastTurnKey = null;          // chime once when it's your turn to act
 
@@ -506,7 +507,7 @@ const Player = (() => {
       <div class="profile-row">
         <input id="profile-name" type="text" maxlength="16" autocomplete="off"
           value="${esc(nameDraft !== null ? nameDraft : view.you.name)}">
-        <button id="profile-save" class="btn">Save</button>
+        <button id="profile-save" class="btn">${Date.now() - profileSavedFlash < 1500 ? '✓ Saved' : 'Save'}</button>
       </div>
       ${toastMsg ? `<p class="error small-text" style="margin-top:6px">${esc(toastMsg)}</p>` : ''}
       <div class="avatar-grid">${AVATARS.map(a =>
@@ -944,7 +945,13 @@ const Player = (() => {
 
     const saveProfileName = () => {
       const pn = el('profile-name');
-      if (pn) sendAction({ t: 'profile', name: pn.value });
+      if (!pn) return;
+      sendAction({ t: 'profile', name: pn.value });
+      // Instant feedback — the confirming broadcast re-render keeps it via the flag.
+      profileSavedFlash = Date.now();
+      const b = el('profile-save');
+      if (b) b.textContent = '✓ Saved';
+      setTimeout(() => { profileSavedFlash = 0; const b2 = el('profile-save'); if (b2) b2.textContent = 'Save'; }, 1500);
     };
     const pn = el('profile-name');
     if (pn) {

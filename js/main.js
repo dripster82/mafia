@@ -134,7 +134,18 @@ const App = (() => {
       watchPublicGames();
       el('join-name').focus();
     };
-    el('btn-refresh-public').onclick = loadPublicGames;
+    el('btn-refresh-public').onclick = async () => {
+      const b = el('btn-refresh-public');
+      b.disabled = true;
+      b.textContent = '⏳ Checking…';
+      const started = Date.now();
+      await loadPublicGames();
+      // Hold the spinner a beat so instant responses still visibly "did something".
+      setTimeout(() => {
+        b.textContent = '✓ Updated';
+        setTimeout(() => { b.textContent = '↻ Refresh'; b.disabled = false; }, 900);
+      }, Math.max(0, 400 - (Date.now() - started)));
+    };
 
     document.querySelectorAll('.back-home').forEach(b => {
       b.onclick = () => showScreen('home');
