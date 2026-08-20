@@ -20,6 +20,7 @@ const Player = (() => {
   let toastMsg = null;             // transient message from the host (e.g. name taken)
   let toastTimer = null;
   let chatDraft = '';              // in-progress chat message, survives re-renders
+  let mafiaDraft = '';             // in-progress family-chat message
   let phaseTickInterval = null;    // 1s countdown updater for the phase timer
   let lastTurnKey = null;          // chime once when it's your turn to act
 
@@ -403,14 +404,29 @@ const Player = (() => {
         view.chat.length
           ? view.chat.map(m => m.divider
               ? `<div class="chat-divider">—— ${esc(m.divider)} ——</div>`
-              : `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+              : `<div class="chat-msg${m.chan === 'ghost' ? ' chat-ghost' : ''}"><span class="chat-who">${m.chan === 'ghost' ? '👻 ' : ''}${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
           : '<p class="muted small-text">No one has said anything yet…</p>'
       }</div>
       ${view.canChat ? `<div class="chat-row">
-        <input id="chat-input" type="text" maxlength="200" placeholder="Say something…" autocomplete="off" value="${esc(chatDraft)}">
+        <input id="chat-input" type="text" maxlength="200" placeholder="${view.ghostChat ? 'Whisper to the other ghosts…' : 'Say something…'}" autocomplete="off" value="${esc(chatDraft)}">
         <button id="chat-send" class="btn">Send</button>
-      </div>` : '<p class="muted small-text">The dead may listen, but not speak.</p>'}
+      </div>${view.ghostChat ? '<p class="muted small-text">👻 Your whispers appear in the chat — but only the dead can see them.</p>' : ''}` : '<p class="muted small-text">The dead may listen, but not speak.</p>'}
     </div>`;
+  }
+
+  /* The mafia's private channel — shown only to living family members. */
+  function mafiaChatCardHTML() {
+    if (!view.mafiaChat) return '';
+    return `<div class="card"><h3>🔪 Family chat</h3>
+      <div id="mchat-log" class="chat-log chat-log-mafia">${
+        view.mafiaChat.length
+          ? view.mafiaChat.map(m => `<div class="chat-msg"><span class="chat-who">${m.avatar || ''} ${esc(m.name)}</span> ${esc(m.text)}</div>`).join('')
+          : '<p class="muted small-text">The family is quiet…</p>'
+      }</div>
+      <div class="chat-row">
+        <input id="mchat-input" type="text" maxlength="200" placeholder="Only the family sees this…" autocomplete="off" value="${esc(mafiaDraft)}">
+        <button id="mchat-send" class="btn">Send</button>
+      </div></div>`;
   }
 
   /* Lobby-only: rename yourself and pick an avatar. */
@@ -639,6 +655,7 @@ const Player = (() => {
           n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
         }${n.canSkip ? `<button class="btn ghost" data-night="skip">${esc(n.skipLabel)}</button>` : ''}</div></div>`;
       }
+      html += mafiaChatCardHTML();
     }
 
     /* ----- day / voting ----- */
@@ -659,6 +676,7 @@ const Player = (() => {
         ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
           : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
         </div>`;
+      html += mafiaChatCardHTML();
       html += chatCardHTML();
     }
 
@@ -750,6 +768,9 @@ const Player = (() => {
     const prevChat = document.getElementById('chat-input');
     const chatFocused = prevChat && document.activeElement === prevChat;
     const chatSel = chatFocused ? prevChat.selectionStart : 0;
+    const prevMChat = document.getElementById('mchat-input');
+    const mchatFocused = prevMChat && document.activeElement === prevMChat;
+    const mchatSel = mchatFocused ? prevMChat.selectionStart : 0;
 
     c.innerHTML = html;
 
@@ -774,6 +795,28 @@ const Player = (() => {
     if (cs) cs.onclick = sendChat;
     const cl = el('chat-log');
     if (cl) cl.scrollTop = cl.scrollHeight;
+
+    const sendMChat = () => {
+      const mi = el('mchat-input');
+      if (!mi || !mi.value.trim()) return;
+      sendAction({ t: 'chat', text: mi.value, chan: 'mafia' });
+      mafiaDraft = '';
+      mi.value = '';
+      mi.focus();
+    };
+    const mi = el('mchat-input');
+    if (mi) {
+      mi.oninput = () => { mafiaDraft = mi.value; };
+      mi.onkeydown = e => { if (e.key === 'Enter') sendMChat(); };
+      if (mchatFocused) {
+        mi.focus();
+        try { mi.setSelectionRange(mchatSel, mchatSel); } catch (e) {}
+      }
+    }
+    const ms = el('mchat-send');
+    if (ms) ms.onclick = sendMChat;
+    const mcl = el('mchat-log');
+    if (mcl) mcl.scrollTop = mcl.scrollHeight;
 
     // Phase countdown: the host's clock is authoritative; adjust for skew and
     // tick locally so we don't need per-second broadcasts.

@@ -167,18 +167,28 @@ const Host = (() => {
     if (msg.t === 'profile') return handleProfile(p, msg);
     if (msg.t === 'confirm') return handleConfirm(p);
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
-    if (msg.t === 'chat') return handleChat(p, msg.text);
+    if (msg.t === 'chat') return handleChat(p, msg.text, msg.chan);
     if (msg.t === 'lastWords') return handleLastWords(p, msg.text);
   }
 
-  /* Table talk: lobby (waiting banter) and day (discussion). */
-  function handleChat(p, text) {
-    if ((G.phase !== 'day' && G.phase !== 'lobby') || !p.alive) return;
+  /* Table talk on three channels: 'main' (lobby banter + day discussion),
+   * 'ghost' (the dead whisper in the same stream, visible only to the dead),
+   * and 'mafia' (a private family channel, open day and night). */
+  function handleChat(p, text, chan) {
     text = String(text || '').trim().slice(0, 200);
     if (!text) return;
-    G.chat.push({ name: p.name, avatar: p.avatar, text });
+    if (!p.alive) chan = 'ghost';           // the dead can only whisper to each other
+    else if (chan !== 'mafia') chan = 'main';
+    if (chan === 'mafia' && (G.phase === 'lobby' || !p.role || teamOf(p) !== 'mafia')) return;
+    const phaseOk = chan === 'mafia'
+      ? (G.phase === 'day' || G.phase === 'night')
+      : (G.phase === 'day' || G.phase === 'lobby');
+    if (!phaseOk) return;
+    G.chat.push(Object.assign({ name: p.name, avatar: p.avatar, text },
+      chan === 'main' ? {} : { chan }));
     if (G.chat.length > 250) G.chat = G.chat.slice(-250);
-    if (G.phase === 'day') { G.lastChatAt = Date.now(); reactToChat(p, text); }
+    // Only public day talk sways the table (and holds the bots' votes open).
+    if (G.phase === 'day' && chan === 'main') { G.lastChatAt = Date.now(); reactToChat(p, text); }
     broadcast();
   }
 
@@ -1661,11 +1671,30 @@ const Host = (() => {
       const ui = nightUIFor(p);
       if (!ui) return;
       const choice = botNightChoice(p, ui);
-      if (choice) handleNightAction(p, choice);
+      if (choice) {
+        // Mafia bots call their shot on the family channel.
+        if ((p.role === 'mafia' || p.role === 'don') && choice !== 'skip' && Math.random() < 0.5) {
+          const t = getPlayer(choice);
+          if (t) handleChat(p, rndOf([
+            `Tonight it's ${t.name}. Agreed?`,
+            `I say we pay ${t.name} a visit.`,
+            `${t.name} has been too sharp. They sleep tonight.`,
+          ]), 'mafia');
+        }
+        handleNightAction(p, choice);
+      }
     } else if (G.phase === 'day') {
       if (conn._chatDay !== G.dayNum) {
         conn._chatDay = G.dayNum;
         handleChat(p, botLine(p));
+        // …and mutter strategy where only the family can hear.
+        if (p.role && teamOf(p) === 'mafia' && Math.random() < 0.4) {
+          const ci = p.chatIntent;
+          const t = ci && ci.target && ci.target !== 'nobody' ? getPlayer(ci.target) : null;
+          handleChat(p, t && t.alive
+            ? rndOf([`I'll keep the table pointed at ${t.name}.`, `Pile on ${t.name} if it comes to a vote.`, `${t.name} takes the fall today.`])
+            : rndOf(['Heads down today — vote with the crowd.', 'Don’t defend me too hard, it looks worse.', 'Let the villagers eat each other.']), 'mafia');
+        }
         return;
       }
       if (!(p.id in G.votes)) {
@@ -1708,6 +1737,12 @@ const Host = (() => {
   function broadcast() {
     G.players.forEach(p => send(p.id, { t: 'state', view: viewFor(p) }));
     render();
+  }
+
+  /* The chat stream as one player sees it: everyone gets the main channel and
+   * dividers; only the dead also see the ghosts' whispers. */
+  function chatFor(p) {
+    return G.chat.filter(m => m.divider || !m.chan || (m.chan === 'ghost' && !p.alive)).slice(-150);
   }
 
   /* The public announcement, with roles stripped when they stay secret on death. */
@@ -1815,8 +1850,13 @@ const Host = (() => {
     }
 
     if (G.phase === 'lobby') {
-      view.chat = G.chat.slice(-150);
+      view.chat = chatFor(p);
       view.canChat = true;
+    }
+
+    // The mafia's private channel runs day and night.
+    if ((G.phase === 'day' || G.phase === 'night') && p.alive && p.role && teamOf(p) === 'mafia') {
+      view.mafiaChat = G.chat.filter(m => m.chan === 'mafia').slice(-60);
     }
 
     if (G.phase === 'day') {
@@ -1848,8 +1888,9 @@ const Host = (() => {
           role: !t.alive && roleVisibleTo(p, t) && t.role ? t.role : null,
         })),
       };
-      view.chat = G.chat.slice(-150);
-      view.canChat = p.alive;
+      view.chat = chatFor(p);
+      view.canChat = true;           // the dead whisper on the ghost channel
+      view.ghostChat = !p.alive;
     }
 
     // Solo test vs bots: expose each bot's personal suspicion table.
