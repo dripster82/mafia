@@ -170,10 +170,11 @@ input[type="text"]:focus { border-color: var(--accent); }
 .phase-timer.urgent { color: var(--accent); border-color: var(--accent); animation: pulse 1s infinite; }
 
 /* Vote rows: voters' names on the left, the candidate floated right */
-/* Vote rows: identity + count pill on the first line, voters wrap below. */
-.target-grid .vote-line {
+/* Vote rows: identity + count pill on the first line, voters wrap below.
+   (.btn.vote-line outweighs the generic .target-grid .btn row layout.) */
+.target-grid .btn.vote-line {
   display: flex; flex-direction: column; align-items: stretch;
-  justify-content: flex-start; gap: 0;
+  justify-content: flex-start; gap: 0; text-align: left;
 }
 .vote-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .vote-who { display: flex; align-items: center; gap: 7px; min-width: 0; font-weight: 700; }
