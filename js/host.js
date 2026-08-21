@@ -579,6 +579,19 @@ const Host = (() => {
     });
 
     // A detective vouching for someone pulls bot votes OFF the cleared player.
+    // A general remark with no names ("I'm innocent") still deserves a
+    // response most of the time — silence kills the table.
+    if (!mentioned.length && !speaker.isBot) {
+      const responders = alivePlayers().filter(b => b.isBot && b.id !== speaker.id);
+      if (responders.length && Math.random() < 0.7) {
+        const b = rndOf(responders);
+        setTimeout(() => {
+          if (!G || G.phase !== 'day' || !b.alive || !speaker.alive) return;
+          handleChat(b, botGeneralReply(b, speaker, lower));
+        }, 2500 + Math.random() * 6000);
+      }
+    }
+
     const clearedByDet = detClaim ? mentioned.find(t => verdicts[t.id] === 'defend') : null;
     if (clearedByDet) {
       const cleared = clearedByDet;
@@ -616,8 +629,13 @@ const Host = (() => {
         const line = t.role === 'jester'
           ? rndOf(['Yes!! I mean… no? Definitely no. 😏', 'Guilty! Of being charming. Nothing else.'])
           : n === 0
-            ? rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…', 'Me?! I’ve been helping this whole time!'])
-            : rndOf(['I already TOLD you — it isn’t me.', 'Still on me? Fine. Vote, and see what it costs you.', 'Ask anyone. I’m clean. Look at who’s pointing instead.']);
+            ? rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…',
+                     'Me?! I’ve been helping this whole time!', 'Point that finger somewhere useful.',
+                     'Interesting. And what exactly did I do?', 'Wrong tree. Keep barking though.'])
+            : rndOf(['I already TOLD you — it isn’t me.', 'Still on me? Fine. Vote, and see what it costs you.',
+                     'Ask anyone. I’m clean. Look at who’s pointing instead.',
+                     'This obsession with me is starting to look like a strategy.',
+                     'Fine. Vote me out and enjoy explaining it tomorrow.']);
         handleChat(t, line);
       }, defDelay);
     });
@@ -636,6 +654,8 @@ const Host = (() => {
           handleChat(b, rndOf([
             `If the detective says it's ${accused.name}, that settles it for me.`,
             `Good enough for me — I'm voting ${accused.name}.`,
+            `A badge is a badge. ${accused.name} it is.`,
+            `Works for me. ${accused.name}, any last words?`,
           ]));
         }, 3000 + Math.random() * 6000);
       }
@@ -799,6 +819,34 @@ const Host = (() => {
     }
   }
 
+  /* Response to a nameless table remark — tone depends on the bot's read
+   * of the speaker. */
+  function botGeneralReply(b, speaker, lower) {
+    const selfDefense = /i'?m innocent|i am innocent|wasn'?t me|not (the )?mafia|i'?m clean|not me\b/.test(lower);
+    if (selfDefense) {
+      const s = suspOf(b, speaker.id);
+      if (s >= 2) return rndOf([
+        `That's exactly what the mafia would say, ${speaker.name}.`,
+        `Sure, ${speaker.name}. The innocent never seem to need announcing it.`,
+        `Noted. Loudly innocent. Very reassuring, ${speaker.name}.`,
+        `${speaker.name} doth protest too much, if you ask me.`,
+      ]);
+      if (s <= -2) return rndOf([
+        `For what it's worth, I believe ${speaker.name}.`,
+        `${speaker.name}'s been straight with us all game. I buy it.`,
+        `Ease off ${speaker.name} — there are better suspects here.`,
+      ]);
+      return rndOf([
+        `Everyone says that, ${speaker.name}. Give us something we can check.`,
+        `Okay, ${speaker.name} — then who ISN'T innocent?`,
+        `Innocent people point fingers, ${speaker.name}. Point one.`,
+        `We hear you. Now convince us with a name.`,
+        `${speaker.name}, so was the last person we buried. Allegedly.`,
+      ]);
+    }
+    return botReplyTo(b, lower);
+  }
+
   /* What a bot says when directly addressed — consistent with how it votes. */
   function botReplyTo(bot, lower) {
     if (/\?|what do you think|who (do|should|is)|any ideas|thoughts/.test(lower)) {
@@ -822,9 +870,17 @@ const Host = (() => {
           `Honestly? My money's on ${pick.name}.`,
           `If I had to guess: ${pick.name}.`,
           `Something's been off about ${pick.name} all day.`,
+          `${pick.name}. Don't ask me to explain it, it's a gut thing.`,
+          `I keep coming back to ${pick.name}. Nobody's that quiet by accident.`,
+          `Put it this way: I wouldn't lend ${pick.name} my ladder.`,
         ]);
       }
-      return rndOf(['Too early to say.', 'I need more to go on — keep talking.', 'No idea yet. Watch the quiet ones.']);
+      return rndOf([
+        'Too early to say.', 'I need more to go on — keep talking.',
+        'No idea yet. Watch the quiet ones.',
+        'Ask me again after someone slips up.',
+        'My list has three names on it and I hate all three.',
+      ]);
     }
     if (/\b(hi|hello|hey|morning|yo)\b/.test(lower)) {
       return rndOf(['Hey 👋', 'Morning. Rough night, huh?', 'Hello there.', 'Yo. Trust no one.']);
@@ -2584,6 +2640,8 @@ const Host = (() => {
             `Hearing all that… my vote's going to ${fresh.name}.`,
             `Actually — it's ${fresh.name}. I'm sure now.`,
             `Fine, you've convinced me. ${fresh.name}.`,
+            `New information, new vote: ${fresh.name}.`,
+            `I've gone back and forth, but it lands on ${fresh.name}.`,
           ]));
           target = fresh.id;
         }
