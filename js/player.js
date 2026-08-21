@@ -76,25 +76,37 @@ const Player = (() => {
 
   /* Gather ICE candidates against our own server config to learn which
    * paths this device can use: host (LAN), srflx (STUN), relay (TURN). */
+  let probeRelayOk = null; // null = unknown, true/false once the probe settles
+
   function probeIce() {
     try {
       const cfg = (window.MAFIA_PEER_CONFIG && window.MAFIA_PEER_CONFIG.config) || PEER_OPTS.config;
       const pc = new RTCPeerConnection(cfg);
       const found = new Set();
+      let done = false;
+      const finish = why => {
+        if (done) return;
+        done = true;
+        probeRelayOk = found.has('relay');
+        dbg(`ice probe ${why}: ${found.size ? [...found].join(', ') : 'NO candidates'}${probeRelayOk ? '' : ' — TURN relay NOT reachable (bad credentials or exhausted plan?)'}`);
+        try { pc.close(); } catch (err) {}
+      };
       pc.createDataChannel('probe');
       pc.addEventListener('icecandidateerror', e =>
         dbg(`ice probe server error: ${e.url || '?'} code=${e.errorCode || '?'} ${e.errorText || ''}`));
       pc.onicecandidate = e => {
         if (e.candidate) {
           const m = / typ (\w+)/.exec(e.candidate.candidate);
-          if (m && !found.has(m[1])) { found.add(m[1]); dbg(`ice probe: found ${m[1]} candidate`); }
-        } else {
-          dbg(`ice probe complete: ${found.size ? [...found].join(', ') : 'NO candidates'}${found.has('relay') ? '' : ' — TURN relay NOT reachable'}`);
-          try { pc.close(); } catch (err) {}
-        }
+          if (m && !found.has(m[1])) {
+            found.add(m[1]);
+            dbg(`ice probe: found ${m[1]} candidate`);
+            if (m[1] === 'relay') probeRelayOk = true;
+          }
+        } else finish('complete');
       };
       pc.createOffer().then(o => pc.setLocalDescription(o)).catch(e => dbg('ice probe offer failed: ' + e.message));
-      setTimeout(() => { try { pc.close(); } catch (err) {} }, 20000);
+      // iOS sometimes never fires the end-of-candidates event — report anyway.
+      setTimeout(() => finish('timed out'), 12000);
     } catch (e) {
       dbg('ice probe unavailable: ' + e.message);
     }
@@ -254,6 +266,9 @@ const Player = (() => {
     if (!c) return;
     c.innerHTML = `<div class="card center">
         <p class="error">${esc(msg)}</p>
+        ${probeRelayOk === false ? `<p class="small-text muted" style="margin-top:6px">📡 The relay server didn’t answer this device.
+          If nobody can join from other networks, the game’s TURN account may be out of credit or its credentials changed —
+          tell the host to check their Metered dashboard. Same-network joins still work.</p>` : ''}
         <button id="btn-retry" class="btn primary big">Try again</button>
         <button id="btn-give-up" class="btn link">← Back to join screen</button>
       </div>` + debugPanelHTML();
