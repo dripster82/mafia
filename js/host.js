@@ -374,6 +374,7 @@ const Host = (() => {
     if (G.phase === 'day') {
       G.voteClosing = false;
       G.lastChatAt = Date.now();
+      G.dayStartAt = Date.now();
       setTimeout(() => { if (G && G.phase === 'day') maybeCloseVoting(); }, 1500);
     }
 
@@ -571,6 +572,13 @@ const Host = (() => {
       if (verdicts[bot.id] === 'accuse' && !/\?/.test(lower)) return; // flat accusations get the defense path below
       if (Date.now() - (bot.lastReplyAt || 0) < (speaker.isBot ? 8000 : 4000)) return;
       if (Math.random() > (speaker.isBot ? 0.75 : 0.95)) return;
+      if (speaker.isBot) {
+        // Bots answering bots is how filibusters start — two rounds each, tops.
+        const rc = bot.replyDay === G.dayNum ? bot.botReplies || 0 : 0;
+        if (rc >= 2) return;
+        bot.replyDay = G.dayNum;
+        bot.botReplies = rc + 1;
+      }
       bot.lastReplyAt = Date.now();
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !bot.alive) return;
@@ -1776,6 +1784,7 @@ const Host = (() => {
     G.ghostSaves = {};
     G.voteClosing = false;
     G.lastChatAt = Date.now(); // bots hold their votes until the table goes quiet
+    G.dayStartAt = Date.now(); // …but not forever (see the overdue ballot cap)
     setPhaseTimer(settings.dayTimer, () => { if (G && G.phase === 'day') resolveVote(true); });
     addLog(`Day ${G.dayNum} begins. The town votes.`);
     broadcast();
@@ -1857,6 +1866,14 @@ const Host = (() => {
     broadcast();
   }
 
+  /* The ballot opens after 6 quiet seconds — but two bots sniping at each
+   * other must not filibuster the day, so after 75s of talk the vote
+   * proceeds regardless. */
+  function tableSettled() {
+    if (Date.now() - (G.lastChatAt || 0) >= 6000) return true;
+    return Date.now() - (G.dayStartAt || 0) > 75000;
+  }
+
   /* A bot's runoff ballot: mafia protect the family, town vote their top
    * suspect of the two, abstain when they truly can't pick. */
   function runoffPickFor(p) {
@@ -1884,6 +1901,7 @@ const Host = (() => {
     G.ghostSaves = {};
     G.voteClosing = false;
     G.lastChatAt = Date.now();
+    G.dayStartAt = Date.now();
     addLog(`⚖️ The vote tied between ${candidateIds.map(nameOf).join(' and ')} — runoff! Vote for one of them, or abstain.`, true);
     setPhaseTimer(120, () => { if (G && G.phase === 'day') resolveVote(true); });
     // Bots need a fresh look at the shorter ballot.
@@ -2537,12 +2555,12 @@ const Host = (() => {
     // Dead bots decide their ghost vote: cast it on a strong lead, else save it.
     if (!p.alive) {
       if (G.phase === 'day' && G.runoff && G.runoff.ghostIds.includes(p.id) && !(p.id in G.votes)) {
-        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        if (!tableSettled()) { scheduleBot(conn); return; }
         handleVote(p, runoffPickFor(p));
         return;
       }
       if (G.phase === 'day' && !G.runoff && ghostCanVote(p) && !(p.id in G.votes) && !G.ghostSaves[p.id]) {
-        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        if (!tableSettled()) { scheduleBot(conn); return; }
         const known = p.intel && p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
         const pick = (known && known.length) ? known[0] : botSuspicionPick(p, 3);
         if (pick && Math.random() < 0.7) handleVote(p, pick.id);
@@ -2615,7 +2633,7 @@ const Host = (() => {
       if (!(p.id in G.votes)) {
         // Votes wait until the table has been quiet for a while, so they're
         // cast on everything that was said — not on first impressions.
-        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        if (!tableSettled()) { scheduleBot(conn); return; }
         if (G.runoff) { handleVote(p, runoffPickFor(p)); return; }
         // Start from what the bot declared at the table; decide fresh if it
         // never spoke today or its declared target has since died.
