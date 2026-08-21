@@ -78,6 +78,9 @@ const Host = (() => {
     return p.role && ROLES[p.role] ? ROLES[p.role].team : 'town';
   }
   function aliveMafia() { return alivePlayers().filter(p => teamOf(p) === 'mafia'); }
+  // The deck is public knowledge (role summary), so bots may reason about it:
+  // with a Recruiter dealt, even a proven-attacked player could turn later.
+  function recruiterInPlay() { return G.players.some(x => x.role === 'recruiter'); }
   function killers() { return alivePlayers().filter(p => p.role === 'mafia' || p.role === 'don'); }
   function getPlayer(id) { return G.players.find(p => p.id === id); }
   function nameOf(id) { const p = getPlayer(id); return p ? p.name : '?'; }
@@ -478,6 +481,12 @@ const Host = (() => {
    * credulity factor — some bots are gullible, some skeptical. */
   function bumpFor(listener, targetId, amt) {
     if (!listener.isBot || listener.id === targetId) return;
+    // A proven attack victim is innocent for good — unless a Recruiter is in
+    // the deck, in which case doubt may creep back in.
+    if (amt > 0) {
+      const t = getPlayer(targetId);
+      if (t && t.clearedInnocent && !recruiterInPlay()) return;
+    }
     const v = Math.round(amt * (listener.credulity || 1)) || (amt > 0 ? 1 : -1);
     listener.susp = listener.susp || {};
     // Clamp so no one becomes an unshakeable pariah (or untouchable saint).
@@ -1030,7 +1039,7 @@ const Host = (() => {
       p.ledgerReports = 0; p.consigCount = 0; p.poisonCount = 0;
       p.vigMafiaKills = 0; p.detReads = {}; p.poisonedBy = null; p.forgedBy = null;
       p.pledgedNight = null; p.diedNight = null; p.votedOutInnocent = false;
-      p.familyShare = null;
+      p.familyShare = null; p.clearedInnocent = false;
       // Every bot gets a temperament that shapes how it talks and votes.
       if (p.isBot) {
         p.persona = rndOf(['accuser', 'analyst', 'sheep', 'contrarian', 'showman']);
@@ -1099,6 +1108,15 @@ const Host = (() => {
       if (x.susp) Object.keys(x.susp).forEach(k => { x.susp[k] = Math.round(x.susp[k] / 2); });
       x.heat = Math.floor((x.heat || 0) / 2);
     });
+    // Without a Recruiter, proven innocence never fades.
+    if (!recruiterInPlay()) {
+      G.players.filter(t => t.clearedInnocent).forEach(t => {
+        G.players.filter(b => b.isBot).forEach(b => {
+          b.susp = b.susp || {};
+          b.susp[t.id] = -6;
+        });
+      });
+    }
     setPhaseTimer(settings.nightTimer, () => { if (G && G.phase === 'night') resolveNight(true); });
     addLog(`Night ${G.dayNum} falls. The town sleeps.`);
     // A 10s grace before naming the slow ones — then re-broadcast to reveal.
@@ -1609,8 +1627,13 @@ const Host = (() => {
     clearedIds.forEach(id => {
       const t = getPlayer(id);
       if (!t) return;
-      heatUp(t, -4);
-      alivePlayers().filter(b => b.isBot && b.id !== id).forEach(b => bumpFor(b, id, -3));
+      t.clearedInnocent = true;
+      t.heat = 0;
+      const pinned = recruiterInPlay() ? -4 : -6;
+      alivePlayers().filter(b => b.isBot && b.id !== id).forEach(b => {
+        b.susp = b.susp || {};
+        b.susp[id] = Math.min(b.susp[id] || 0, pinned);
+      });
     });
     if (revivedName) addLog(`⚰️ A miracle at dawn — ${revivedName} has risen from the dead!`, true);
     if (!killed.length && !woundedNames.length && !saved && !revivedName && !curedName) {
@@ -2508,7 +2531,7 @@ const Host = (() => {
         if (p.role && teamOf(p) === 'mafia') {
           if (p.familyShare && Math.random() < 0.85) {
             handleChat(p, p.familyShare, 'mafia');
-            p.familyShare = null;
+            p.familyShare = null; p.clearedInnocent = false;
           } else if (Math.random() < 0.4) {
             const ci = p.chatIntent;
             const t = ci && ci.target && ci.target !== 'nobody' ? getPlayer(ci.target) : null;
