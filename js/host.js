@@ -36,6 +36,8 @@ const Host = (() => {
   let pendingAnnounce = null; // trailing announce when a change hits the throttle
   let voteCloseTimer = null; // short pause between the last vote and the verdict
   let hostPanelOpen = false; // in-game host panels fold away by default
+  let offlineMode = false;   // broker unreachable: solo-with-bots still works
+  let connTypeTimer = null;  // periodic P2P/TURN measurement for the host panel
   let verdictTimer = null;   // when the verdict screen moves on
 
   function deckOpts() {
@@ -126,15 +128,87 @@ const Host = (() => {
       if (err.type === 'unavailable-id') {
         peer.destroy();
         create(hostName);
+      } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        // No internet? Solo play against bots works fine — only remote
+        // joins need the broker. Keep hosting, say so, keep retrying quietly.
+        offlineMode = true;
+        const pill = document.getElementById('host-room-pill');
+        if (pill) pill.textContent = 'Room: 📴 offline';
+        render();
       } else if (err.type !== 'peer-unavailable') {
         renderFatal('Connection error: ' + err.type + '. Refresh to try again.');
+      }
+    });
+    peer.on('open', () => {
+      if (offlineMode) {
+        offlineMode = false;
+        const pill = document.getElementById('host-room-pill');
+        if (pill) pill.textContent = 'Room: ' + roomCode;
+        render();
       }
     });
     peer.on('disconnected', () => {
       try { peer.reconnect(); } catch (e) { /* destroyed */ }
     });
     startLobbyBeacon();
+    startConnMonitor();
     render();
+  }
+
+  /* ---- who's connected how (host panel) ---- */
+
+  function startConnMonitor() {
+    clearInterval(connTypeTimer);
+    connTypeTimer = setInterval(updateConnTypes, 8000);
+    updateConnTypes();
+  }
+
+  async function updateConnTypes() {
+    if (!G) return;
+    let changed = false;
+    for (const p of G.players) {
+      const c = conns[p.id];
+      let type = null;
+      if (p.isBot || (localConn && p.id === localConn._playerId)) type = 'local';
+      else if (c && c.open && c.peerConnection) {
+        try {
+          const stats = await c.peerConnection.getStats();
+          let pairId = null;
+          stats.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) pairId = r.selectedCandidatePairId; });
+          let pair = null;
+          stats.forEach(r => {
+            if (r.type === 'candidate-pair' &&
+                ((pairId && r.id === pairId) || (!pairId && r.nominated && r.state === 'succeeded'))) pair = r;
+          });
+          if (pair) {
+            let lt = null, rt = null;
+            stats.forEach(r => {
+              if (r.id === pair.localCandidateId) lt = r.candidateType;
+              if (r.id === pair.remoteCandidateId) rt = r.candidateType;
+            });
+            type = (lt === 'relay' || rt === 'relay') ? 'turn'
+              : (lt === 'host' && rt === 'host') ? 'lan' : 'p2p';
+          }
+        } catch (e) { /* stats unavailable — keep the last reading */ }
+      }
+      if (type && p.connType !== type) { p.connType = type; changed = true; }
+    }
+    if (changed) render(); // host-only readout; nothing to broadcast
+  }
+
+  function connCardHTML() {
+    const label = {
+      local: '🖥 this device', lan: '🔗 direct (same network)',
+      p2p: '🌐 peer-to-peer', turn: '📡 TURN relay',
+    };
+    const humans = G.players.filter(pl => !pl.isBot);
+    return `<div class="card"><h3>📶 Connections${offlineMode ? ' — 📴 offline' : ''}</h3>
+      <div class="player-list">${humans.map(pl => `
+        <div class="player-row"><span class="dot ${pl.connected ? 'on' : 'off'}"></span>
+          <span class="name">${pl.avatar || ''} ${esc(pl.name)}</span>
+          <span class="muted small-text">${pl.connected ? (label[pl.connType] || 'measuring…') : 'disconnected'}</span>
+        </div>`).join('')}</div>
+      <p class="hint">Peer-to-peer is free; 📡 relayed players count against the TURN plan.</p></div>`;
   }
 
   function attachLocalPlayer(name) {
@@ -151,6 +225,7 @@ const Host = (() => {
   }
 
   function destroy() {
+    clearInterval(connTypeTimer);
     viewCache = {};
     announcePublic(true);
     clearInterval(lobbyBeacon);
@@ -275,6 +350,9 @@ const Host = (() => {
     peer.on('error', err => {
       if (err.type === 'unavailable-id') {
         renderFatal('The old game is still open in another tab or window — close it, then resume again.');
+      } else if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        offlineMode = true;
+        render();
       } else if (err.type !== 'peer-unavailable') {
         renderFatal('Connection error: ' + err.type + '. Refresh to try again.');
       }
@@ -294,6 +372,7 @@ const Host = (() => {
 
     addLog('The host reconnected — the game resumes.');
     startLobbyBeacon();
+    startConnMonitor();
     broadcast();
     return true;
   }
@@ -2815,6 +2894,7 @@ const Host = (() => {
           <div class="url">${roomCode ? esc(App.joinLinkFor(roomCode)) : ''}</div>
           <label class="opt" style="justify-content:center;margin-top:10px"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
             🌐 Public game — anyone can find this room on the join page</label>
+          ${offlineMode ? '<p class="error small-text" style="margin-top:8px">📴 No connection to the join server — solo play with bots works, but other devices can’t join until you’re back online.</p>' : ''}
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
@@ -2922,8 +3002,10 @@ const Host = (() => {
     // During the game, the host's extra panels fold away so their screen
     // looks like everyone else's; the lobby keeps them open (they ARE the UI).
     if (G.phase === 'lobby') {
+      html += connCardHTML();
       html += logHTML();
     } else {
+      html += connCardHTML();
       const openNow = G.phase === 'ended' ? true : hostPanelOpen;
       const restart = G.phase !== 'ended'
         ? `<div class="card"><button id="btn-restart" class="btn" style="width:100%">🔁 Restart — scrap this game, back to the lobby</button></div>`
