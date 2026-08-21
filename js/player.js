@@ -749,7 +749,8 @@ const Player = (() => {
           Mafia cap: ${view.settings.maxMafia || 'auto'} · Votes: ${view.settings.showVoters ? 'open' : 'secret ballot'}
           ${view.settings.noSelfHeal ? ' · Doctor: no self-heal' : ''}
           ${view.settings.lastWords === false ? ' · No last words' : ''}
-          ${view.settings.revealOnDeath === false ? ' · Roles stay secret on death' : ''}<br>
+          ${view.settings.revealOnDeath === false ? ' · Roles stay secret on death' : ''}
+          ${view.settings.rumourDays === 0 ? ' · No rumours' : view.settings.rumourDays === 1 ? ' · Daily rumours' : ''}<br>
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
       html += profileCardHTML();

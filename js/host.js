@@ -19,6 +19,7 @@ const Host = (() => {
     ghostVote: false,
     lastWords: true,     // eliminated players leave last words (the Forger needs this)
     showNightWaiting: true, // after 10s, name who the night is still waiting on
+    rumourDays: 2,       // a dawn rumour every N days (0 = off), starting day 1
     publicGame: false,   // list this lobby on the join page's public directory
     revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need it OFF)
     nightTimer: 120, dayTimer: 300,
@@ -1482,7 +1483,7 @@ const Host = (() => {
     // (mafia, doctor, any visitor — the rumour can't tell them apart), 30% a
     // red herring who stayed home.
     let rumour = null;
-    if (G.dayNum % 2 === 1 && alivePlayers().length) {
+    if (settings.rumourDays > 0 && (G.dayNum - 1) % settings.rumourDays === 0 && alivePlayers().length) {
       const outIds = [...new Set(visits.map(x => x.visitor))]
         .filter(id => { const pl = getPlayer(id); return pl && pl.alive; });
       const homeIds = alivePlayers().filter(pl => !outIds.includes(pl.id)).map(pl => pl.id);
@@ -2439,6 +2440,7 @@ const Host = (() => {
         safeFirstNight: settings.safeFirstNight, maxMafia: settings.maxMafia, showVoters: settings.showVoters,
         noSelfHeal: settings.noSelfHeal, nightTimer: settings.nightTimer, dayTimer: settings.dayTimer,
         lastWords: settings.lastWords, revealOnDeath: settings.revealOnDeath,
+        rumourDays: settings.rumourDays,
         extraRoles: Object.keys(settings.roles).filter(r => settings.roles[r]),
       },
       timer: G.deadline ? { deadline: G.deadline, hostNow: Date.now() } : null,
@@ -2687,6 +2689,10 @@ const Host = (() => {
             Doctor can't protect themselves</label>
           <label class="opt"><input type="checkbox" id="opt-ghost-vote" ${settings.ghostVote ? 'checked' : ''}>
             👻 The dead get one last vote — usable on any later day</label>
+          <label class="opt">🗣 Rumours at dawn:
+            <select id="opt-rumours">${[[0, 'Off'], [1, 'Every day'], [2, 'Every 2 days'], [3, 'Every 3 days']].map(([v, l]) =>
+              `<option value="${v}" ${settings.rumourDays === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select></label>
           <label class="opt"><input type="checkbox" id="opt-night-waiting" ${settings.showNightWaiting ? 'checked' : ''}>
             😴 After 10 seconds, show who the night is still waiting on <span class="muted small-text">(hints at who holds a night role)</span></label>
           <label class="opt"><input type="checkbox" id="opt-last-words" ${settings.lastWords ? 'checked' : ''}>
@@ -2803,6 +2809,8 @@ const Host = (() => {
     if (osh) osh.onchange = () => { settings.noSelfHeal = osh.checked; broadcast(); };
     const ogv = el('opt-ghost-vote');
     if (ogv) ogv.onchange = () => { settings.ghostVote = ogv.checked; broadcast(); };
+    const oru = el('opt-rumours');
+    if (oru) oru.onchange = () => { settings.rumourDays = parseInt(oru.value, 10) || 0; broadcast(); };
     const onw = el('opt-night-waiting');
     if (onw) onw.onchange = () => { settings.showNightWaiting = onw.checked; broadcast(); };
     const olw = el('opt-last-words');
