@@ -3,6 +3,36 @@
  * career totals) are computed on each player's own device from their stats.
  * Unlocks live in localStorage per device. */
 
+/* Display order, grouped with headers (general first, then one per role). */
+const ACHIEVEMENT_GROUPS = [
+  { title: '🏅 Winning', ids: ['first-blood', 'hat-trick', 'made-man', 'pillar', 'lone-wolf', 'sole-survivor', 'perfect-town', 'clean-sweep', 'full-house'] },
+  { title: '💀 Dying Well', ids: ['boots-on', 'martyr', 'famous-last-words', 'vengeful-spirit', 'tough-crowd'] },
+  { title: '🗳 Table Play', ids: ['chatterbox', 'kingmaker', 'bandwagon-driver', 'against-grain'] },
+  { title: '🧑‍🌾 Villager', ids: ['just-a-farmer', 'voice-of-people', 'unremarkable'] },
+  { title: '🔍 Detective', ids: ['gumshoe', 'framed', 'case-closed'] },
+  { title: '💉 Doctor', ids: ['miracle-worker', 'antidote', 'heal-thyself'] },
+  { title: '⚰️ Mortician', ids: ['necromancer', 'grave-concerns', 'too-late'] },
+  { title: '🪟 Watcher', ids: ['neighbourhood-watch', 'eyes-everywhere'] },
+  { title: '🛡 Bodyguard', ids: ['human-shield', 'not-on-my-watch', 'quiet-shift'] },
+  { title: '🔫 Vigilante', ids: ['sharpshooter', 'friendly-fire', 'double-tap'] },
+  { title: '👣 Tracker', ids: ['hot-pursuit', 'cold-trail'] },
+  { title: '🔬 Coroner', ids: ['cause-of-death', 'full-morgue'] },
+  { title: '📒 Bookkeeper', ids: ['long-audit', 'balanced-ledger'] },
+  { title: '🎖 Mayor', ids: ['landslide', 'sitting-duck', 'silent-majority'] },
+  { title: '🔪 Mafia & Don', ids: ['cold-blooded', 'bold-faced', 'don-abides', 'head-family'] },
+  { title: '🔧 Fixer', ids: ['wrench-in-works', 'silenced-sleuth'] },
+  { title: '🖼 Framer', ids: ['stitch-up', 'miscarriage'] },
+  { title: '☠️ Poisoner', ids: ['slow-burn', 'serial-doser'] },
+  { title: '🧠 Consigliere', ids: ['know-your-enemy', 'full-dossier'] },
+  { title: '✒️ Forger', ids: ['ink-blot', 'wasted-ink'] },
+  { title: '🧹 Cleaner', ids: ['spotless', 'deep-clean'] },
+  { title: '🤝 Recruiter', ids: ['welcome-family', 'puppet-master'] },
+  { title: '🃏 Jester', ids: ['curtain-call', 'tragic-comedy'] },
+  { title: '🪓 Executioner', ids: ['grudge-settled', 'plans-ruined'] },
+  { title: '🎒 Drifter', ids: ['nine-lives', 'ghost-town'] },
+  { title: '🕶 Power Roles', ids: ['silent-service'] },
+];
+
 const ACHIEVEMENTS = {
   /* ---- winning ---- */
   'first-blood':    { icon: '🥇', name: 'First Blood', desc: 'Win your first game.' },

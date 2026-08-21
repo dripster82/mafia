@@ -539,6 +539,22 @@ const Player = (() => {
 
   let newUnlocks = []; // achievements earned this game, for the ended screen
 
+  /* The full catalogue, grouped under role/section headers.
+   * `has(id)` decides which entries render lit vs dimmed. */
+  function achievementListHTML(has) {
+    return ACHIEVEMENT_GROUPS.map(g => {
+      const gotHere = g.ids.filter(has).length;
+      return `<p class="small-text muted ach-group" style="margin:12px 0 2px"><strong>${g.title}</strong>
+          <span style="float:right">${gotHere}/${g.ids.length}</span></p>` +
+        g.ids.map(id => {
+          const a = ACHIEVEMENTS[id];
+          if (!a) return '';
+          return `<p class="small-text" style="margin:5px 0;${has(id) ? '' : 'opacity:0.4'}">${a.icon}
+            <strong>${esc(a.name)}</strong>${a.shame ? ' 🙈' : ''} — <span class="muted">${esc(a.desc)}</span></p>`;
+        }).join('');
+    }).join('');
+  }
+
   function myAchievementIds() {
     try {
       const store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}');
@@ -601,9 +617,7 @@ const Player = (() => {
             <span class="muted">${esc(ACHIEVEMENTS[id].desc)}</span></p>`).join('')
         : '<p class="muted small-text">No new achievements this game.</p>'}
       <details style="margin-top:8px"><summary class="small-text muted" style="cursor:pointer">All achievements</summary>${
-        Object.entries(ACHIEVEMENTS).map(([id, a]) =>
-          `<p class="small-text" style="margin:6px 0;${store[id] ? '' : 'opacity:0.4'}">${a.icon}
-            <strong>${esc(a.name)}</strong>${a.shame ? ' 🙈' : ''} — <span class="muted">${esc(a.desc)}</span></p>`).join('')
+        achievementListHTML(id => !!store[id])
       }</details></div>`;
   }
 
@@ -641,8 +655,7 @@ const Player = (() => {
     return fab + `<div class="guide-overlay trophy-overlay"><div class="guide-panel card">
       <div class="section-title"><h3>${title}</h3><button id="btn-trophies-close" class="btn small">✕ Close</button></div>
       <p class="muted small-text" style="margin:2px 0 6px">${got}/${all.length} unlocked</p>
-      ${all.map(id => { const a = ACHIEVEMENTS[id]; return `<p class="small-text" style="margin:6px 0;${has(id) ? '' : 'opacity:0.4'}">${a.icon}
-        <strong>${esc(a.name)}</strong>${a.shame ? ' 🙈' : ''} — <span class="muted">${esc(a.desc)}</span></p>`; }).join('')}
+      ${achievementListHTML(has)}
     </div></div>`;
   }
 
