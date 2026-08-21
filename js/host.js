@@ -784,6 +784,12 @@ const Host = (() => {
     if (G.phase !== 'lobby') return;
     if (msg.avatar && AVATARS.includes(msg.avatar)) {
       p.avatar = msg.avatar;
+      // Humans have first claim on a face — a bot wearing it picks a new one.
+      G.players.filter(b => b.isBot && b.id !== p.id && b.avatar === p.avatar).forEach(b => {
+        const used = new Set(G.players.map(x => x.avatar));
+        const free = AVATARS.filter(a => !used.has(a));
+        if (free.length) b.avatar = rndOf(free);
+      });
     }
     if (msg.name !== undefined) {
       const name = String(msg.name || '').trim().slice(0, 16);
