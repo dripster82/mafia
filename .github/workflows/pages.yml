@@ -1,11 +1,12 @@
 name: Deploy to GitHub Pages
 
-# Publishes the site by syncing main into the gh-pages branch, which GitHub
-# Pages serves. (The gh-pages route works without touching repo settings.)
+# Publishes the site by composing the gh-pages branch, which GitHub Pages
+# serves: main becomes the site root, and (when it exists) the `redesign`
+# branch is served under /redesign/ as a parallel playground.
 
 on:
   push:
-    branches: [main]
+    branches: [main, redesign]
   workflow_dispatch:
 
 permissions:
@@ -20,13 +21,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Push site to gh-pages
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Compose gh-pages (main at root, redesign under /redesign/)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B gh-pages
+          MAIN_SHA=$(git rev-parse --short=8 main)
+          git checkout -B gh-pages main
           # Stamp asset URLs with the commit so browsers fetch fresh JS/CSS
           # after every deploy instead of serving 10-minute-stale caches.
-          sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" index.html
-          git commit -am "Stamp build ${GITHUB_SHA::8}"
+          sed -i "s/__BUILD__/${MAIN_SHA}/g" index.html
+          # Layer in the redesign branch as a subdirectory, if it exists.
+          if git rev-parse --verify origin/redesign >/dev/null 2>&1; then
+            RE_SHA=$(git rev-parse --short=8 origin/redesign)
+            rm -rf redesign
+            mkdir redesign
+            git archive origin/redesign | tar -x -C redesign
+            sed -i "s/__BUILD__/${RE_SHA}-r/g" redesign/index.html
+            rm -rf redesign/.github
+            git add -A redesign
+          fi
+          git commit -am "Stamp build ${MAIN_SHA}"
           git push -f origin gh-pages
