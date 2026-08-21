@@ -2674,8 +2674,11 @@ const Host = (() => {
       html += logHTML();
     } else {
       const openNow = G.phase === 'ended' ? true : hostPanelOpen;
+      const restart = G.phase !== 'ended'
+        ? `<div class="card"><button id="btn-restart" class="btn" style="width:100%">🔁 Restart — scrap this game, back to the lobby</button></div>`
+        : '';
       html = `<details class="host-fold" id="host-fold" ${openNow ? 'open' : ''}>
-        <summary>🛠 Host controls &amp; public log</summary>${html}${logHTML()}</details>`;
+        <summary>🛠 Host controls &amp; public log</summary>${html}${restart}${logHTML()}</details>`;
     }
     c.innerHTML = html;
 
@@ -2687,6 +2690,9 @@ const Host = (() => {
     on('btn-force-night', () => { if (confirm('End the night now? Players who haven’t acted will take no action.')) forceEndNight(); });
     on('btn-force-vote', () => { if (confirm('End voting now? Only votes already cast will count.')) forceEndVoting(); });
     on('btn-again', playAgain);
+    on('btn-restart', () => {
+      if (confirm('Restart the game? The current game is abandoned — roles are discarded and everyone returns to the lobby.')) playAgain();
+    });
     on('btn-add-bot', addBot);
     on('btn-force-reveal', () => { if (confirm('Begin the first night now, even though not everyone has confirmed?')) startNight(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
