@@ -46,6 +46,9 @@ body {
 }
 
 #app { min-height: 100dvh; display: flex; flex-direction: column; }
+/* Game screens are an app shell: pin the page to the viewport so long
+ * content scrolls inside its pane/content area, never the page. */
+#app:has(.game-screen.active) { height: 100dvh; overflow: hidden; }
 
 /* ---------------- screens ---------------- */
 
@@ -406,14 +409,19 @@ select {
 /* Desktop: every pane at once, no tab bar. */
 @media (min-width: 1000px) {
   .tab-bar { display: none; }
-  .panes {
-    display: grid;
-    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(300px, 380px);
-    gap: 0;
+  /* Same flex row as mobile, all three panes visible. Flex stretch pins
+   * each pane to the shell height so long content scrolls inside its
+   * pane instead of stretching the page. */
+  .pane {
+    display: block !important;
+    min-height: 0; min-width: 0;
+    flex: 0 1 340px;
+    padding: 14px;
+    border-right: 1px solid var(--line-soft);
   }
-  .pane { display: block !important; padding: 14px; border-right: 1px solid var(--line-soft); }
+  .pane-town { flex: 1 1 auto; }
+  .pane-chat { flex: 0 1 400px; display: flex !important; flex-direction: column; }
   .pane:last-child { border-right: none; }
-  .pane-chat { display: flex !important; flex-direction: column; }
   .shell.scroll { max-width: 720px; }
 }
 
