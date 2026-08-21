@@ -1873,6 +1873,8 @@ const Host = (() => {
       return (s(best) >= 2 && Math.random() < 0.7) ? best : rndOf(fresh);
     }
     if (role === 'doctor' || role === 'bodyguard') {
+      // A poisoned doctor knows it — physician, heal thyself.
+      if (role === 'doctor' && p.poisonedNight !== null && inT(p.id)) return p.id;
       const pri = (G.protectPriority || []).find(id => inT(id));
       if (pri && Math.random() < 0.7) return pri;              // they'll come back for them
       if (claimant && Math.random() < 0.5) return claimant.id; // shield the claimed detective

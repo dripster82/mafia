@@ -926,14 +926,19 @@ const Player = (() => {
     const prevMChat = document.getElementById('mchat-input');
     const mchatFocused = prevMChat && document.activeElement === prevMChat;
     const mchatSel = mchatFocused ? prevMChat.selectionStart : 0;
-    // The role guide must not jump to the top when a broadcast re-renders.
+    // The role guide must not jump to the top when a broadcast re-renders,
+    // and the past-votes fold must not snap shut.
     const prevGuide = c.querySelector('.guide-panel');
     const guideScroll = prevGuide ? prevGuide.scrollTop : 0;
+    const prevHist = c.querySelector('.vote-history');
+    const histOpen = prevHist ? prevHist.open : false;
 
     c.innerHTML = html;
 
     const gp = c.querySelector('.guide-panel');
     if (gp && guideScroll) gp.scrollTop = guideScroll;
+    const vh = c.querySelector('.vote-history');
+    if (vh && histOpen) vh.open = true;
 
     const sendChat = () => {
       const ci = el('chat-input');
