@@ -508,6 +508,9 @@ const Host = (() => {
     // (True or not: the doctor only learns what's said at the table.)
     if (/poison/.test(lower) && /\bi\b|\bme\b|i'?m|i'?ve/.test(lower)) {
       G.protectPriority = [speaker.id, ...(G.protectPriority || []).filter(id => id !== speaker.id)];
+      // Probably innocent — the mafia don't poison their own. (Probably.)
+      heatUp(speaker, -3);
+      alivePlayers().filter(b => b.isBot && b.id !== speaker.id).forEach(b => bumpFor(b, speaker.id, -2));
     }
 
     // Public record: any role claim is remembered — if someone else later dies
@@ -555,7 +558,7 @@ const Host = (() => {
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !bot.alive) return;
         handleChat(bot, botReplyTo(bot, lower));
-      }, 1500 + Math.random() * 2500);
+      }, 2000 + Math.random() * 6000);
     });
 
     // A detective vouching for someone pulls bot votes OFF the cleared player.
@@ -588,6 +591,7 @@ const Host = (() => {
       if (n >= 2) return;
       if (Math.random() > (speaker.isBot ? 0.6 : 0.95)) return;
       t.defendCount = { day: G.dayNum, n: n + 1 };
+      const defDelay = 2000 + Math.random() * 6000;
       setTimeout(() => {
         if (!G || G.phase !== 'day' || !t.alive) return;
         const line = t.role === 'jester'
@@ -596,7 +600,7 @@ const Host = (() => {
             ? rndOf(['Whoa, why me? I’m innocent!', 'It wasn’t me, I swear!', 'You’re making a big mistake…', 'Me?! I’ve been helping this whole time!'])
             : rndOf(['I already TOLD you — it isn’t me.', 'Still on me? Fine. Vote, and see what it costs you.', 'Ask anyone. I’m clean. Look at who’s pointing instead.']);
         handleChat(t, line);
-      }, 1500 + Math.random() * 2500);
+      }, defDelay);
     });
 
     // …and a detective claim can win a believer.
@@ -613,7 +617,7 @@ const Host = (() => {
             `If the detective says it's ${accused.name}, that settles it for me.`,
             `Good enough for me — I'm voting ${accused.name}.`,
           ]));
-        }, 2000 + Math.random() * 2500);
+        }, 3000 + Math.random() * 6000);
       }
     }
     maybeReconsiderVotes();
@@ -736,7 +740,7 @@ const Host = (() => {
             `Remember: ${c.deadName}, the real detective, pointed at ${t.name}. That's good enough for me.`,
           ]));
         }
-      }, 3000 + i * 3500 + Math.random() * 2000);
+      }, 5000 + i * 6000 + Math.random() * 5000);
     });
   }
 
@@ -1590,6 +1594,24 @@ const Host = (() => {
       addLog(savedName ? `${savedName} was attacked, but the doctor saved them!` : 'The doctor saved someone from an attack in the night!', true);
     }
     if (curedName) addLog(`💊 The doctor saved ${curedName} from the poison!`, true);
+
+    // Public dawn events are evidence: the mafia never attack their own, so
+    // the wounded, the (publicly named) saved, and the poison-cured all read
+    // as innocent to every listening bot.
+    const clearedIds = [
+      ...woundedIds,
+      ...(saved && savedId && G.dayNum === 1 ? [savedId] : []),
+    ];
+    if (curedName) {
+      const cured = G.players.find(x => x.name === curedName);
+      if (cured) clearedIds.push(cured.id);
+    }
+    clearedIds.forEach(id => {
+      const t = getPlayer(id);
+      if (!t) return;
+      heatUp(t, -4);
+      alivePlayers().filter(b => b.isBot && b.id !== id).forEach(b => bumpFor(b, id, -3));
+    });
     if (revivedName) addLog(`⚰️ A miracle at dawn — ${revivedName} has risen from the dead!`, true);
     if (!killed.length && !woundedNames.length && !saved && !revivedName && !curedName) {
       addLog(forced ? 'The night was ended early.' : 'The night passed quietly.');
@@ -2462,6 +2484,15 @@ const Host = (() => {
       }
     } else if (G.phase === 'day') {
       if (conn._chatDay !== G.dayNum) {
+        // Spread opening remarks over the first stretch of the day instead
+        // of everyone talking over each other in the first three seconds.
+        if (conn._chatAtDay !== G.dayNum) {
+          conn._chatAtDay = G.dayNum;
+          conn._chatAt = Date.now() + 1000 + Math.random() * 14000;
+          scheduleBot(conn);
+          return;
+        }
+        if (Date.now() < conn._chatAt) { scheduleBot(conn); return; }
         conn._chatDay = G.dayNum;
         // A poisoned bot begs for the doctor — its only chance of surviving.
         if (p.poisonedNight !== null && teamOf(p) !== 'mafia' && Math.random() < 0.85) {
