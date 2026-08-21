@@ -143,7 +143,9 @@ const Host = (() => {
       _playerId: null,
     };
     Player.initLocal(name, msg => handleMessage(localConn, msg));
-    handleJoin(localConn, { t: 'join', name });
+    let myAch = [];
+    try { myAch = Object.keys(JSON.parse(localStorage.getItem('mafia-achievements') || '{}')); } catch (e) {}
+    handleJoin(localConn, { t: 'join', name, ach: myAch });
   }
 
   function destroy() {
@@ -325,6 +327,10 @@ const Host = (() => {
     if (msg.t === 'confirm') return handleConfirm(p);
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
     if (msg.t === 'chat') return handleChat(p, msg.text, msg.chan);
+    if (msg.t === 'achShare') {
+      if (Array.isArray(msg.ach)) p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
+      return;
+    }
     if (msg.t === 'lastWords') return handleLastWords(p, msg.text);
   }
 
@@ -783,6 +789,11 @@ const Host = (() => {
       };
       G.players.push(p);
       if (midGame) addLog(`${name} joined as a spectator.`);
+    }
+
+    // Devices share their trophy cabinet on join (shown in the lobby).
+    if (Array.isArray(msg.ach)) {
+      p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
     }
 
     p.connected = true;
@@ -1818,7 +1829,7 @@ const Host = (() => {
     setPhaseTimer(0);
     G.players = keep.map(p => ({
       id: p.id, name: p.name, role: null, alive: true, connected: true, causeOfDeath: null,
-      avatar: p.avatar, isBot: p.isBot,
+      avatar: p.avatar, isBot: p.isBot, achShare: p.achShare,
     }));
     addLog('New game — waiting for the host to start.');
     broadcast();
@@ -2355,6 +2366,9 @@ const Host = (() => {
         role: roleVisibleTo(p, t) && G.phase !== 'lobby' && t.role ? t.role : null,
         poisoned: !!(p.role && teamOf(p) === 'mafia' && t.alive && t.poisonedNight !== null),
         causeOfDeath: t.alive ? null : t.causeOfDeath,
+        achCount: (t.achShare || []).length,
+        // Full trophy lists only travel in the lobby, where they're browsed.
+        achievements: G.phase === 'lobby' ? (t.achShare || []) : undefined,
       })),
     };
 

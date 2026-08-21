@@ -170,7 +170,7 @@ const Player = (() => {
       conn.on('open', () => {
         dbg('data channel OPEN — sending join');
         connected = true;
-        conn.send({ t: 'join', name: myName, playerId: getStoredPlayerId() });
+        conn.send({ t: 'join', name: myName, playerId: getStoredPlayerId(), ach: myAchievementIds() });
       });
       conn.on('iceStateChanged', s => dbg('ice state: ' + s));
       conn.on('data', handleMessage);
@@ -368,6 +368,9 @@ const Player = (() => {
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
           <span class="name">${avatarHTML(p.avatar, { dead: !p.alive && !p.spectator, mayor: p.pledged && p.alive })} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' (you)' : ''}</span>
+          ${p.achievements && p.achievements.length
+            ? `<button class="btn small ghost" data-ach="${p.id}">🏆 ${p.achievements.length}</button>`
+            : p.achCount ? `<span class="status">🏆 ${p.achCount}</span>` : ''}
           ${mayorBadge}${poisonBadge}${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
@@ -536,6 +539,13 @@ const Player = (() => {
 
   let newUnlocks = []; // achievements earned this game, for the ended screen
 
+  function myAchievementIds() {
+    try {
+      const store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}');
+      return Object.keys(store).filter(id => ACHIEVEMENTS[id]);
+    } catch (e) { return []; }
+  }
+
   function unlockAchievements(ids) {
     try {
       const store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}');
@@ -573,6 +583,8 @@ const Player = (() => {
       if ((s.townWins || 0) >= 5) cross.push('pillar');
       if ((s.n1Streak || 0) >= 3) cross.push('boots-on');
       unlockAchievements([...(r.achievements || []), ...cross]);
+      // Refresh the trophy cabinet the host shows next to our name.
+      sendAction({ t: 'achShare', ach: myAchievementIds() });
     } catch (e) {}
   }
 
@@ -606,6 +618,32 @@ const Player = (() => {
         ${s.mafiaWins ? ` · 🔪 ${s.mafiaWins} as mafia` : ''}
         ${s.soloWins ? ` · 🎭 ${s.soloWins} solo` : ''}
         ${s.survived ? ` · 🌅 survived ${s.survived}` : ''}</p></div>`;
+  }
+
+  /* Trophy room: a 🏆 button on every screen. Shows your own cabinet, or —
+   * from the lobby list — another player's shared unlocks. */
+  let trophyOpen = false;
+  let trophyViewId = null;
+  function trophyHTML() {
+    const fab = `<button id="btn-trophies" class="guide-fab trophy-fab" title="Achievements">🏆</button>`;
+    if (!trophyOpen) return fab;
+    let title = '🏆 Your achievements';
+    let ids = null; // null = read your own from this device
+    if (trophyViewId && view.players) {
+      const pl = view.players.find(x => x.id === trophyViewId);
+      if (pl && pl.achievements) { title = `🏆 ${esc(pl.name)}’s achievements`; ids = pl.achievements; }
+    }
+    let store = {};
+    if (!ids) { try { store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}'); } catch (e) {} }
+    const has = id => ids ? ids.includes(id) : !!store[id];
+    const all = Object.keys(ACHIEVEMENTS);
+    const got = all.filter(has).length;
+    return fab + `<div class="guide-overlay trophy-overlay"><div class="guide-panel card">
+      <div class="section-title"><h3>${title}</h3><button id="btn-trophies-close" class="btn small">✕ Close</button></div>
+      <p class="muted small-text" style="margin:2px 0 6px">${got}/${all.length} unlocked</p>
+      ${all.map(id => { const a = ACHIEVEMENTS[id]; return `<p class="small-text" style="margin:6px 0;${has(id) ? '' : 'opacity:0.4'}">${a.icon}
+        <strong>${esc(a.name)}</strong>${a.shame ? ' 🙈' : ''} — <span class="muted">${esc(a.desc)}</span></p>`; }).join('')}
+    </div></div>`;
   }
 
   /* Lobby-only: rename yourself and pick an avatar. */
@@ -956,6 +994,7 @@ const Player = (() => {
     }
 
     html += guideHTML();
+    html += trophyHTML();
 
     // Keep text inputs alive across re-renders (broadcasts arrive whenever
     // anyone joins, changes profile, chats, or votes).
@@ -1030,8 +1069,18 @@ const Player = (() => {
     if (gb) gb.onclick = () => { guideOpen = true; render(); };
     const gc = el('btn-guide-close');
     if (gc) gc.onclick = () => { guideOpen = false; render(); };
-    const go = c.querySelector('.guide-overlay');
+    const go = c.querySelector('.guide-overlay:not(.trophy-overlay)');
     if (go) go.onclick = e => { if (e.target === go) { guideOpen = false; render(); } };
+
+    const tb = el('btn-trophies');
+    if (tb) tb.onclick = () => { trophyOpen = true; trophyViewId = null; render(); };
+    const tc = el('btn-trophies-close');
+    if (tc) tc.onclick = () => { trophyOpen = false; trophyViewId = null; render(); };
+    const to = c.querySelector('.trophy-overlay');
+    if (to) to.onclick = e => { if (e.target === to) { trophyOpen = false; trophyViewId = null; render(); } };
+    c.querySelectorAll('[data-ach]').forEach(b => {
+      b.onclick = () => { trophyViewId = b.dataset.ach; trophyOpen = true; render(); };
+    });
 
     const copyBtn = el('btn-copy-result');
     if (copyBtn) copyBtn.onclick = () => {
