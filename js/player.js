@@ -170,7 +170,9 @@ const Player = (() => {
       conn.on('open', () => {
         dbg('data channel OPEN — sending join');
         connected = true;
-        conn.send({ t: 'join', name: myName, playerId: getStoredPlayerId(), ach: myAchievementIds() });
+        let favAvatar = null;
+        try { favAvatar = localStorage.getItem('mafia-avatar'); } catch (e) {}
+        conn.send({ t: 'join', name: myName, playerId: getStoredPlayerId(), ach: myAchievementIds(), avatar: favAvatar });
       });
       conn.on('iceStateChanged', s => dbg('ice state: ' + s));
       conn.on('data', handleMessage);
@@ -1215,7 +1217,10 @@ const Player = (() => {
     const ps = el('profile-save');
     if (ps) ps.onclick = saveProfileName;
     c.querySelectorAll('[data-avatar]').forEach(b => {
-      b.onclick = () => sendAction({ t: 'profile', avatar: b.dataset.avatar });
+      b.onclick = () => {
+        sendAction({ t: 'profile', avatar: b.dataset.avatar });
+        try { localStorage.setItem('mafia-avatar', b.dataset.avatar); } catch (e) {}
+      };
     });
 
     const roleCard = el('role-card');

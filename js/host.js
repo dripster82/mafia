@@ -220,8 +220,12 @@ const Host = (() => {
     };
     Player.initLocal(name, msg => handleMessage(localConn, msg));
     let myAch = [];
-    try { myAch = Object.keys(JSON.parse(localStorage.getItem('mafia-achievements') || '{}')); } catch (e) {}
-    handleJoin(localConn, { t: 'join', name, ach: myAch });
+    let myAvatar = null;
+    try {
+      myAch = Object.keys(JSON.parse(localStorage.getItem('mafia-achievements') || '{}'));
+      myAvatar = localStorage.getItem('mafia-avatar');
+    } catch (e) {}
+    handleJoin(localConn, { t: 'join', name, ach: myAch, avatar: myAvatar });
   }
 
   function destroy() {
@@ -927,6 +931,17 @@ const Host = (() => {
     // Devices share their trophy cabinet on join (shown in the lobby).
     if (Array.isArray(msg.ach)) {
       p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
+    }
+    // The device remembers its favourite face — honour it when it's free
+    // (bots wearing it step aside; humans keep first claim).
+    if (msg.avatar && AVATARS.includes(msg.avatar) &&
+        !G.players.some(x => x.id !== p.id && !x.isBot && x.avatar === msg.avatar)) {
+      p.avatar = msg.avatar;
+      G.players.filter(b => b.isBot && b.id !== p.id && b.avatar === p.avatar).forEach(b => {
+        const used = new Set(G.players.map(x => x.avatar));
+        const free = AVATARS.filter(a => !used.has(a));
+        if (free.length) b.avatar = rndOf(free);
+      });
     }
 
     p.connected = true;
