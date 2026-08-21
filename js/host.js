@@ -3166,6 +3166,8 @@ const Host = (() => {
     if (G.phase === 'lobby') {
       html += connCardHTML();
       html += logHTML();
+      // Two magazine columns on wide screens; a single flow on phones.
+      html = `<div class="host-lobby">${html}</div>`;
     } else {
       html += connCardHTML();
       const openNow = G.phase === 'ended' ? true : hostPanelOpen;
@@ -3173,7 +3175,7 @@ const Host = (() => {
         ? `<div class="card"><button id="btn-restart" class="btn" style="width:100%">🔁 Restart — scrap this game, back to the lobby</button></div>`
         : '';
       html = `<details class="host-fold" id="host-fold" ${openNow ? 'open' : ''}>
-        <summary>🛠 Host controls &amp; public log</summary>${html}${restart}${logHTML()}</details>`;
+        <summary>🛠 Host</summary>${html}${restart}${logHTML()}</details>`;
     }
     c.innerHTML = html;
 
