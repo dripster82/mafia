@@ -505,9 +505,23 @@ const Host = (() => {
     // iOS smart punctuation turns ' into ’ — normalize so "I’m the detective"
     // matches the same as "I'm the detective".
     const lower = text.toLowerCase().replace(/[’‘`´]/g, "'");
+    const DEFEND_RE = /innocent|not (the )?mafia|isn'?t (the )?mafia|it'?s not|it is not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe|save\b/;
+    const ACCUSE_RE = /mafia|suspicious|\bsus\b|guilty|lying|liar|lied|\blie\b|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/;
     const detClaim = /i'?m the detective|i am the detective|detective here|bet my badge/.test(lower);
-    const defend = /innocent|not (the )?mafia|isn'?t (the )?mafia|it'?s not|it is not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe|save\b/.test(lower);
-    const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|lied|\blie\b|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/.test(lower);
+    // Judge each clause on its own: "Max I'm innocent. Sal is mafia" defends
+    // no one but the speaker toward Max, and accuses only Sal.
+    const verdicts = {}; // targetId -> 'defend' | 'accuse'
+    lower.split(/[.!?;,\u2014-]+/).forEach(cl => {
+      if (!cl.trim()) return;
+      const clDefend = DEFEND_RE.test(cl);
+      const clAccuse = ACCUSE_RE.test(cl);
+      alivePlayers().forEach(t => {
+        if (t.id === speaker.id || !cl.includes(t.name.toLowerCase())) return;
+        if (clDefend) verdicts[t.id] = 'defend';                      // defense wins its clause
+        else if (clAccuse && verdicts[t.id] !== 'defend') verdicts[t.id] = 'accuse';
+        else if (!(t.id in verdicts)) verdicts[t.id] = null;          // just addressed
+      });
+    });
 
     // Anyone claiming to be the detective becomes a priority for both sides:
     // the mafia want them dead, the town wants them protected.
@@ -529,24 +543,18 @@ const Host = (() => {
       (G.roleClaims = G.roleClaims || {})[speaker.id] = claimMatch[1] || claimMatch[2] || claimMatch[3];
     }
 
-    const mentioned = [];
-    const preMentioned = alivePlayers().filter(t => t.id !== speaker.id && lower.includes(t.name.toLowerCase()));
+    const mentioned = alivePlayers().filter(t => t.id !== speaker.id && t.id in verdicts);
 
     // A false detective claim can draw out the real one.
-    if (detClaim) maybeCounterClaim(speaker, preMentioned[0] || null);
-    alivePlayers().forEach(t => {
-      if (t.id === speaker.id) return;
-      if (!lower.includes(t.name.toLowerCase())) return;
-      mentioned.push(t);
-      // Bot chatter counts for less than a human's word, so bots echoing each
-      // other can't snowball one target — and every listening bot forms its
-      // OWN opinion of what it just heard.
-      // Day 1 has no evidence — bot echo counts for little, so one random
-      // hunch can't snowball into a lynch mob on its own.
+    if (detClaim) maybeCounterClaim(speaker, mentioned[0] || null);
+    mentioned.forEach(t => {
+      const v = verdicts[t.id];
+      // Bot chatter counts for less than a human's word, and day 1 has no
+      // evidence, so bot echo counts for little there.
       const botAccuse = G.dayNum <= 1 && Math.random() < 0.5 ? 0 : 1;
-      const amt = defend ? (detClaim ? (speaker.isBot ? -4 : -6) : speaker.isBot ? -1 : -2)
-                : accuse ? (detClaim ? 5 : speaker.isBot ? botAccuse : 2) : 0;
-      if (detClaim && defend) heatUp(t, -4); // a detective's vouch cools the room
+      const amt = v === 'defend' ? (detClaim ? (speaker.isBot ? -4 : -6) : speaker.isBot ? -1 : -2)
+                : v === 'accuse' ? (detClaim ? 5 : speaker.isBot ? botAccuse : 2) : 0;
+      if (detClaim && v === 'defend') heatUp(t, -4); // a detective's vouch cools the room
       if (amt) {
         alivePlayers().filter(b => b.isBot && b.id !== speaker.id).forEach(b => bumpFor(b, t.id, amt));
         if (amt > 0) heatUp(t, amt);
@@ -560,7 +568,7 @@ const Host = (() => {
     // A human addressing a bot almost always gets an answer; bot-to-bot
     // chatter stays throttled so they don't spiral.
     mentioned.filter(t => t.isBot && t.alive).forEach(bot => {
-      if (accuse && !defend && !/\?/.test(lower)) return; // flat accusations get the defense path below
+      if (verdicts[bot.id] === 'accuse' && !/\?/.test(lower)) return; // flat accusations get the defense path below
       if (Date.now() - (bot.lastReplyAt || 0) < (speaker.isBot ? 8000 : 4000)) return;
       if (Math.random() > (speaker.isBot ? 0.75 : 0.95)) return;
       bot.lastReplyAt = Date.now();
@@ -571,8 +579,9 @@ const Host = (() => {
     });
 
     // A detective vouching for someone pulls bot votes OFF the cleared player.
-    if (detClaim && defend && mentioned.length) {
-      const cleared = mentioned[0];
+    const clearedByDet = detClaim ? mentioned.find(t => verdicts[t.id] === 'defend') : null;
+    if (clearedByDet) {
+      const cleared = clearedByDet;
       alivePlayers().filter(b => b.isBot && G.votes && G.votes[b.id] === cleared.id).forEach(b => {
         if (Math.random() > 0.75) return;
         setTimeout(() => {
@@ -590,11 +599,12 @@ const Host = (() => {
       });
     }
 
-    if (!mentioned.length || defend || !accuse) { maybeReconsiderVotes(); return; }
+    const accusedBots = mentioned.filter(t => t.isBot && t.alive && verdicts[t.id] === 'accuse');
+    if (!accusedBots.length) { maybeReconsiderVotes(); return; }
 
     // Accused bots defend themselves — reliably against a human's finger
     // (up to twice a day, the second time exasperated), less so to bot noise.
-    mentioned.filter(t => t.isBot && t.alive).forEach(t => {
+    accusedBots.forEach(t => {
       if (/\?/.test(lower)) return; // questions were answered above, not defended against
       const n = t.defendCount && t.defendCount.day === G.dayNum ? t.defendCount.n : 0;
       if (n >= 2) return;
@@ -619,7 +629,8 @@ const Host = (() => {
       if (believers.length && Math.random() < 0.5) {
         G.agreedDay = G.dayNum;
         const b = rndOf(believers);
-        const accused = mentioned[0];
+        const accused = mentioned.find(t => verdicts[t.id] === 'accuse');
+        if (!accused) return;
         setTimeout(() => {
           if (!G || G.phase !== 'day' || !b.alive || !accused.alive) return;
           handleChat(b, rndOf([
