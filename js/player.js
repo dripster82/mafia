@@ -454,7 +454,10 @@ const Player = (() => {
         const pill = t.dead
           ? `<span class="vote-deadpill">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`
           : count ? `<span class="vote-count-pill">${count} 🗳</span>` : '';
-        const inner = `<span class="vote-top">${who}${pill}</span>
+        const markCtl = !t.dead && !t.self && t.id !== 'nobody'
+          ? `<span class="mark-btn vote-mark" data-mark="${t.id}" title="Your private read">${markIcon(t.id) || '❓'}</span>`
+          : '';
+        const inner = `<span class="vote-top">${who}<span class="vote-side">${markCtl}${pill}</span></span>
           ${votersHere ? `<span class="vote-under">↳ ${votersHere}</span>` : ''}`;
         const cls = `btn vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row' : ''}${t.self ? ' self-row' : ''}`;
         return (t.dead || t.self || opts.readonly)
@@ -1193,7 +1196,12 @@ const Player = (() => {
       b.onclick = () => sendAction({ t: 'takeover', targetId: b.dataset.takeover });
     });
     c.querySelectorAll('[data-mark]').forEach(b => {
-      b.onclick = () => { cycleMark(b.dataset.mark); render(); };
+      b.onclick = e => {
+        e.stopPropagation();
+        e.preventDefault(); // a mark tap inside a vote row must not cast a vote
+        cycleMark(b.dataset.mark);
+        render();
+      };
     });
 
     const copyBtn = el('btn-copy-result');
