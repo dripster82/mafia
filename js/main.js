@@ -101,6 +101,20 @@ const App = (() => {
     const ver = el('app-version');
     if (ver && ver.textContent.includes('__BUILD__')) ver.textContent = 'Version dev';
 
+    // Apply any non-English strings to the shell screens (see js/i18n.js).
+    if (typeof I18N !== 'undefined' && I18N.lang !== 'en') I18N.apply();
+
+    // A one-line record for returning players (kept per device).
+    try {
+      const s = JSON.parse(localStorage.getItem('mafia-stats') || 'null');
+      if (s && s.games) {
+        const p = document.createElement('p');
+        p.className = 'hint';
+        p.textContent = `📈 Your record: ${s.games} game${s.games > 1 ? 's' : ''}, ${s.wins || 0} won`;
+        el('app-version').before(p);
+      }
+    } catch (e) {}
+
     // A host that reloaded mid-game can pick the same room back up.
     const snap = typeof Host !== 'undefined' && Host.snapshotInfo && Host.snapshotInfo();
     if (snap) {

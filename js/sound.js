@@ -36,6 +36,8 @@ const Sound = (() => {
       else if (kind === 'day') { tone(523, 0, 0.3); tone(659, 0.16, 0.42); }
       else if (kind === 'turn') { tone(880, 0, 0.14, 0.08); tone(1174, 0.16, 0.2, 0.08); }
       else if (kind === 'win') { tone(523, 0, 0.18); tone(659, 0.16, 0.18); tone(784, 0.32, 0.4); }
+      else if (kind === 'danger') { tone(311, 0, 0.25, 0.12); tone(233, 0.22, 0.5, 0.12); }
+      else if (kind === 'tick') { tone(196, 0, 0.07, 0.05); }
     } catch (e) {}
   }
 

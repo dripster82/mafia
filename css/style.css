@@ -136,6 +136,17 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
 .chat-msg.chat-ghost { color: var(--muted); font-style: italic; }
 .bot-tag { font-size: 0.68em; opacity: 0.8; vertical-align: 1px; }
+/* Avatar state rings: gold = public mayor, grey = dead. */
+.av {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5em; height: 1.5em; border-radius: 50%;
+  border: 2px solid transparent; flex-shrink: 0;
+}
+.av.av-mayor { border-color: #d9a542; }
+.av.av-dead { border-color: #4a4f63; filter: grayscale(0.8); opacity: 0.8; }
+.day-summary { padding: 12px 16px; }
+.vote-history { padding: 12px 16px; }
+.vote-history summary { cursor: pointer; font-size: 0.92rem; }
 .chat-new-pill {
   position: fixed; bottom: 68px; left: 50%; transform: translateX(-50%); z-index: 60;
   background: var(--panel2); color: var(--text); border: 1px solid var(--line);

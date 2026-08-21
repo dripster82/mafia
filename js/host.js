@@ -815,7 +815,19 @@ const Host = (() => {
       p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0; p.chatIntent = null;
       p.susp = {}; p.heat = 0; p.credulity = 0.6 + Math.random() * 0.8; // gullible ↔ skeptical
       p.actions = []; p.intel = [];
+      // Every bot gets a temperament that shapes how it talks and votes.
+      if (p.isBot) {
+        p.persona = rndOf(['accuser', 'analyst', 'sheep', 'contrarian', 'showman']);
+        p.credulity = {
+          accuser: 1.1 + Math.random() * 0.3,     // quick to believe the worst
+          analyst: 0.6 + Math.random() * 0.2,     // needs evidence
+          sheep: 1.2 + Math.random() * 0.2,       // swallows the room's mood
+          contrarian: 0.6 + Math.random() * 0.3,  // doubts whatever's popular
+          showman: 0.8 + Math.random() * 0.4,
+        }[p.persona];
+      }
     });
+    G.gameId = 'g' + Math.random().toString(36).slice(2, 10);
     // Each executioner gets a personal grudge against a random townsperson.
     G.players.filter(p => p.role === 'executioner').forEach(ex => {
       const towns = G.players.filter(t => t.id !== ex.id && ROLES[t.role].team === 'town');
@@ -1685,7 +1697,26 @@ const Host = (() => {
       const t = getPlayer(p.execTargetId);
       if (t && t.alive) return t.id;
     }
+    // Personality shapes the vote.
+    const tallies = {};
+    Object.values(G.votes || {}).forEach(t => { if (t !== 'nobody') tallies[t] = (tallies[t] || 0) + 1; });
+    let crowdId = null, crowdN = 0;
+    Object.entries(tallies).forEach(([id, n]) => { if (n > crowdN) { crowdN = n; crowdId = id; } });
+    const crowd = crowdId ? getPlayer(crowdId) : null;
+    const crowdOk = crowd && crowd.alive && crowd.id !== p.id &&
+      !(teamOf(p) === 'mafia' && teamOf(crowd) === 'mafia');
+    if (p.persona === 'sheep' && crowdOk && crowdN >= 2 && Math.random() < 0.75) return crowd.id;
     const pick = botSuspicionPick(p, 2);
+    if (p.persona === 'accuser' && pick) return pick.id;          // always has a target
+    if (p.persona === 'analyst') {
+      const strong = botSuspicionPick(p, 3);
+      if (strong) return strong.id;
+      if (Math.random() < 0.6) return 'nobody';                   // won't vote on vibes
+    }
+    if (p.persona === 'contrarian' && crowdOk && pick && pick.id === crowdId && Math.random() < 0.6) {
+      const alt = botSuspicionPick(p, 2);
+      if (alt && alt.id !== crowdId) return alt.id;               // anyone but the obvious
+    }
     if (pick && Math.random() < 0.75) return pick.id;
     if (teamOf(p) === 'mafia') {
       const town = alivePlayers().filter(t => teamOf(t) !== 'mafia');
@@ -1765,6 +1796,17 @@ const Host = (() => {
           `It's definitely not ${c.name} — let's look elsewhere.`,
         ]);
       }
+    }
+    // Personality colours the small talk.
+    const PERSONA_LINES = {
+      accuser: ['Somebody at this table is lying badly.', 'I’m not waiting all day — start pointing fingers.', 'Every quiet mouth is hiding something.'],
+      analyst: ['Look at the votes, not the noise.', 'Patterns don’t lie. People do.', 'Who benefited from last night? Start there.'],
+      sheep: ['I’ll go with the group on this one.', 'So… what’s everyone else thinking?', 'Whoever most of you pick works for me.'],
+      contrarian: ['The obvious pick is exactly who it ISN’T.', 'You’re all sprinting the wrong way, as usual.', 'Popular opinion got the last one wrong too.'],
+      showman: ['Place your bets, folks — who hangs at sundown? 🎪', 'Day drama! My favourite kind.', 'Someone confess, this lull is killing me.'],
+    };
+    if (p.persona && PERSONA_LINES[p.persona] && Math.random() < 0.45) {
+      return rndOf(PERSONA_LINES[p.persona]);
     }
     return rndOf([
       'Let’s not vote anyone out yet, it’s too early.',
@@ -2016,6 +2058,19 @@ const Host = (() => {
     }
   }
 
+  /* Who voted for whom on past days (before `beforeDay`; pass Infinity for all). */
+  function voteHistoryFor(beforeDay) {
+    return (G.voteHistory || [])
+      .filter(h => h.day < beforeDay)
+      .map(h => ({
+        day: h.day,
+        rows: Object.entries(h.votes).map(([voter, target]) => ({
+          voter: nameOf(voter),
+          target: target === 'nobody' ? 'no one' : nameOf(target),
+        })),
+      }));
+  }
+
   /* The chat stream as one player sees it: everyone gets the main channel and
    * dividers; only the dead also see the ghosts' whispers. */
   function chatFor(p) {
@@ -2168,7 +2223,7 @@ const Host = (() => {
         // day screen shows who's already gone.
         targets: G.players.filter(t => !t.spectator).map(t => ({
           id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id,
-          isBot: !!t.isBot,
+          isBot: !!t.isBot, pledged: !!t.pledged,
           dead: !t.alive, causeOfDeath: t.alive ? null : t.causeOfDeath,
           // Roles show wherever the viewer may see them (own team for the
           // mafia, the public mayor, the dead when reveals are on).
@@ -2179,6 +2234,16 @@ const Host = (() => {
       view.chat = chatFor(p);
       view.canChat = true;           // the dead whisper on the ghost channel
       view.ghostChat = !p.alive;
+      // "Previously…" — the story so far, at a glance.
+      view.daySummary = {
+        alive: alivePlayers().length,
+        total: G.players.filter(x => !x.spectator).length,
+        dead: G.players.filter(x => !x.alive && !x.spectator).map(x => ({
+          name: x.name, avatar: x.avatar, cause: x.causeOfDeath,
+          role: roleVisibleTo(p, x) && x.role ? x.role : null,
+        })),
+      };
+      view.voteHistory = voteHistoryFor(G.dayNum);
     }
 
     // Solo test vs bots: expose each bot's personal suspicion table.
@@ -2187,6 +2252,7 @@ const Host = (() => {
         .filter(b => b.isBot && b.alive)
         .map(b => ({
           name: b.name, avatar: b.avatar, heat: b.heat || 0,
+          persona: b.persona || null,
           credulity: Math.round((b.credulity || 1) * 100) / 100,
           sees: alivePlayers()
             .filter(t => t.id !== b.id)
@@ -2206,6 +2272,8 @@ const Host = (() => {
     }
 
     if (G.phase === 'ended') {
+      const extras = extraWinners();
+      const team = teamOf(p);
       view.recap = {
         timeline: G.log.filter(e => e.important).map(e => e.text),
         yours: (p.actions || []).slice(),
@@ -2213,8 +2281,15 @@ const Host = (() => {
           name: x.name, avatar: x.avatar, role: x.role, you: x.id === p.id,
           actions: (x.actions || []).slice(),
         })),
+        gameId: G.gameId || null,
+        youWon: !p.spectator && !!p.role && (
+          extras.some(w => w.name === p.name) ||
+          (G.winner === 'mafia' && team === 'mafia') ||
+          (G.winner === 'town' && team === 'town') ||
+          (G.winner === 'jester' && p.role === 'jester')),
       };
-      view.extraWinners = extraWinners();
+      view.voteHistory = voteHistoryFor(Infinity);
+      view.extraWinners = extras;
     }
 
     return view;

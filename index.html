@@ -18,10 +18,10 @@
   <section id="screen-home" class="screen active">
     <div class="card center">
       <h1 class="logo">🕵️ Mafia Night</h1>
-      <p class="tagline">A browser-based operator for the classic party game.<br>One device hosts, everyone else joins.</p>
-      <button id="btn-go-host" class="btn primary big">Host a game</button>
-      <button id="btn-go-join" class="btn big">Join a game</button>
-      <p class="hint">No accounts, no servers — devices connect directly to the host. Keep the host device awake for the whole game.</p>
+      <p class="tagline" data-i18n="home.tagline">A browser-based operator for the classic party game.<br>One device hosts, everyone else joins.</p>
+      <button id="btn-go-host" class="btn primary big" data-i18n="home.host">Host a game</button>
+      <button id="btn-go-join" class="btn big" data-i18n="home.join">Join a game</button>
+      <p class="hint" data-i18n="home.hint">No accounts, no servers — devices connect directly to the host. Keep the host device awake for the whole game.</p>
       <p id="app-version" class="hint" style="opacity:0.6">Version __BUILD__</p>
     </div>
   </section>
@@ -33,7 +33,7 @@
       <p class="muted small-text">You'll play too — the app runs the game as a neutral operator.</p>
       <label for="host-name">Your name</label>
       <input id="host-name" type="text" maxlength="16" autocomplete="off" placeholder="e.g. Alex">
-      <button id="btn-create-game" class="btn primary big">Create game</button>
+      <button id="btn-create-game" class="btn primary big" data-i18n="hostsetup.create">Create game</button>
       <button class="btn link back-home">← Back</button>
       <p id="host-error" class="error hidden"></p>
     </div>
@@ -43,11 +43,11 @@
   <section id="screen-join" class="screen">
     <div class="card center">
       <h2>Join a game</h2>
-      <label for="join-name">Your name</label>
+      <label for="join-name" data-i18n="join.name">Your name</label>
       <input id="join-name" type="text" maxlength="16" autocomplete="off" placeholder="e.g. Alex">
-      <label for="join-code">Room code</label>
+      <label for="join-code" data-i18n="join.code">Room code</label>
       <input id="join-code" type="text" maxlength="5" autocomplete="off" autocapitalize="characters" placeholder="e.g. QWXZR">
-      <button id="btn-join" class="btn primary big">Join</button>
+      <button id="btn-join" class="btn primary big" data-i18n="join.join">Join</button>
       <p id="join-error" class="error hidden"></p>
       <div id="public-games-card" style="text-align:left;margin-top:14px">
         <div class="section-title"><h3>🌐 Public games</h3>
@@ -82,6 +82,7 @@
 
 <script src="js/vendor/peerjs.min.js?v=__BUILD__"></script>
 <script src="js/vendor/qrcode.js?v=__BUILD__"></script>
+<script src="js/i18n.js?v=__BUILD__"></script>
 <script src="js/sound.js?v=__BUILD__"></script>
 <script src="js/roles.js?v=__BUILD__"></script>
 <script src="js/host.js?v=__BUILD__"></script>

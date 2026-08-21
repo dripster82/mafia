@@ -291,6 +291,8 @@ const Player = (() => {
     } else if (msg.t === 'report') {
       intel.push(msg.line);
       if (intel.length > 40) intel.shift();
+      // A personal danger report deserves more than a quiet line of intel.
+      if (/POISONED/.test(msg.line)) { Sound.play('danger'); buzz(); }
       render();
     } else if (msg.t === 'error') {
       if (msg.fatal) fatal(msg.msg);
@@ -365,7 +367,7 @@ const Player = (() => {
         const poisonBadge = p.poisoned ? '<span class="status">☠️ poisoned</span>' : '';
         return `<div class="player-row ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
-          <span class="name">${p.avatar || ''} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' (you)' : ''}</span>
+          <span class="name">${avatarHTML(p.avatar, { dead: !p.alive && !p.spectator, mayor: p.pledged && p.alive })} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' (you)' : ''}</span>
           ${mayorBadge}${poisonBadge}${role}${votes}${dead}</div>`;
       }).join('')
     }</div></div>`;
@@ -403,7 +405,7 @@ const Player = (() => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
         const count = v.counts[t.id] || 0;
         // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
-        const who = `<span class="vote-who"><span>${t.avatar || ''}</span>
+        const who = `<span class="vote-who">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}
           <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
           ${t.isBot ? '<span class="bot-tag">🤖</span>' : ''}
           ${t.poisoned ? '<span>☠️</span>' : ''}
@@ -499,6 +501,70 @@ const Player = (() => {
       ${section('🔪 Mafia', all.filter(r => r.team === 'mafia'))}
       ${section('🎭 Neutral', all.filter(r => r.team !== 'town' && r.team !== 'mafia'))}
     </div></div>`;
+  }
+
+  /* "Previously…" — the story so far, shown each day. */
+  function daySummaryHTML() {
+    const s = view.daySummary;
+    if (!s || !s.dead.length) return '';
+    const deadLabel = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding', mafia: 'killed' };
+    return `<div class="card day-summary"><div class="section-title"><h3>📜 The story so far</h3>
+      <span class="muted small-text">${s.alive} of ${s.total} alive</span></div>
+      <p class="small-text muted" style="margin:4px 0 0">${
+        s.dead.map(d => `${d.role ? ROLES[d.role].icon + ' ' : ''}${d.avatar || ''} ${esc(d.name)} <em>(${deadLabel[d.cause] || 'dead'})</em>`).join(' · ')
+      }</p></div>`;
+  }
+
+  /* Who voted for whom on previous days. */
+  function voteHistoryHTML() {
+    const h = view.voteHistory;
+    if (!h || !h.length) return '';
+    return `<details class="card vote-history"><summary><strong>🗳 Past votes</strong></summary>${
+      h.map(d => `<p class="small-text" style="margin:8px 0 2px"><strong>Day ${d.day}</strong></p>
+        <p class="small-text muted" style="margin:0">${
+          d.rows.length ? d.rows.map(r => `${esc(r.voter)} → ${esc(r.target)}`).join(' · ') : 'no votes cast'
+        }</p>`).join('')
+    }</details>`;
+  }
+
+  /* Avatar with a state ring: gold for the public mayor, grey for the dead. */
+  function avatarHTML(avatar, { dead, mayor } = {}) {
+    return `<span class="av${dead ? ' av-dead' : mayor ? ' av-mayor' : ''}">${avatar || ''}</span>`;
+  }
+
+  /* ---- Per-device record, kept in localStorage ---- */
+
+  function recordStats() {
+    const r = view.recap;
+    if (!r || !r.gameId || !view.you.role || view.you.spectator) return;
+    try {
+      const s = JSON.parse(localStorage.getItem('mafia-stats') || '{}');
+      if (s.lastGame === r.gameId) return;   // count each game once
+      s.lastGame = r.gameId;
+      s.games = (s.games || 0) + 1;
+      const team = ROLES[view.you.role].team;
+      if (r.youWon) {
+        s.wins = (s.wins || 0) + 1;
+        if (team === 'mafia') s.mafiaWins = (s.mafiaWins || 0) + 1;
+        else if (team === 'town') s.townWins = (s.townWins || 0) + 1;
+        else s.soloWins = (s.soloWins || 0) + 1;
+      }
+      if (view.you.alive) s.survived = (s.survived || 0) + 1;
+      localStorage.setItem('mafia-stats', JSON.stringify(s));
+    } catch (e) {}
+  }
+
+  function statsCardHTML() {
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('mafia-stats') || 'null'); } catch (e) {}
+    if (!s || !s.games) return '';
+    return `<div class="card"><h3>📈 Your record on this device</h3>
+      <p class="small-text muted" style="margin:4px 0 0">
+        ${s.games} game${s.games > 1 ? 's' : ''} · ${s.wins || 0} won
+        ${s.townWins ? ` · 🏘 ${s.townWins} as village` : ''}
+        ${s.mafiaWins ? ` · 🔪 ${s.mafiaWins} as mafia` : ''}
+        ${s.soloWins ? ` · 🎭 ${s.soloWins} solo` : ''}
+        ${s.survived ? ` · 🌅 survived ${s.survived}` : ''}</p></div>`;
   }
 
   /* Lobby-only: rename yourself and pick an avatar. */
@@ -643,11 +709,13 @@ const Player = (() => {
       html += view.you.spectator
         ? `<div class="banner night"><span class="big-emoji">👁</span>
             <h2>You're spectating</h2>
-            <p class="muted">This game is in progress — watch along, and you'll be dealt in automatically when the next one starts.</p></div>`
+            <p class="muted">This game is in progress — watch along, and you'll be dealt in automatically when the next one starts.</p>
+            <p class="muted small-text">💬 During the day you can whisper with the dead in the chat below.</p></div>`
         : `<div class="banner death"><span class="big-emoji">👻</span>
             <h2>You are dead</h2>
             <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
+      html += daySummaryHTML();
       // During the day the dead see the vote list (their ghost vote if they
       // have one, read-only otherwise) — no separate players list.
       if (view.phase === 'day' && view.vote) {
@@ -672,6 +740,7 @@ const Player = (() => {
               : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
           </div>`;
         }
+        html += voteHistoryHTML();
         html += chatCardHTML();
       } else {
         html += playersListHTML(false);
@@ -740,6 +809,7 @@ const Player = (() => {
       html += `<div class="banner day"><span class="big-emoji">☀️</span><h2>Day ${view.dayNum}</h2>
         ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
       html += announceHTML();
+      html += daySummaryHTML();
       html += roleCardHTML(view.you.role, true);
       html += intelHTML();
 
@@ -754,6 +824,7 @@ const Player = (() => {
         ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
           : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
         </div>`;
+      html += voteHistoryHTML();
       html += mafiaChatCardHTML();
       html += chatCardHTML();
     }
@@ -821,6 +892,9 @@ const Player = (() => {
           }</div></div>`;
         }
       }
+      recordStats();
+      html += voteHistoryHTML();
+      html += statsCardHTML();
       html += `<button id="btn-copy-result" class="btn" style="width:100%;margin-top:8px">📋 Copy result summary</button>`;
       html += playersListHTML(false);
     }
@@ -831,7 +905,7 @@ const Player = (() => {
         <p class="muted small-text" style="margin:4px 0 8px">Each bot's own reads (−6 trusted … +10 suspect), its credulity, and how accused it feels (heat).</p>
         ${view.suspicionDebug.map(b => `
           <p class="small-text" style="margin:8px 0 2px"><strong>${b.avatar || ''} ${esc(b.name)}</strong>
-            <span class="muted">· credulity ×${b.credulity}${b.heat ? ` · heat ${b.heat}` : ''}</span></p>
+            <span class="muted">${b.persona ? `· ${b.persona} ` : ''}· credulity ×${b.credulity}${b.heat ? ` · heat ${b.heat}` : ''}</span></p>
           <p class="small-text muted" style="margin:0">${
             b.sees.length
               ? b.sees.map(x => `${x.avatar || ''} ${esc(x.name)} <strong class="${x.score > 0 ? 'susp-pos' : 'susp-neg'}">${x.score > 0 ? '+' : ''}${x.score}</strong>`).join(' · ')
@@ -945,6 +1019,8 @@ const Player = (() => {
           ? `⏱ ${Math.floor(rem / 60)}:${String(rem % 60).padStart(2, '0')}`
           : '⏱ Time’s up!';
         t.classList.toggle('urgent', rem > 0 && rem <= 30);
+        // A soft heartbeat as the vote clock runs down.
+        if (view.phase === 'day' && rem > 0 && rem <= 10) Sound.play('tick');
       };
       tick();
       phaseTickInterval = setInterval(tick, 1000);

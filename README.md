@@ -89,6 +89,15 @@ Bots act with human-like delays and:
 Role options that depend on a setting drag it into place automatically, and
 turning the setting away unticks the roles.
 
+### Bots with personality
+
+Every bot draws a temperament — **accuser** (quick to point), **analyst**
+(won't vote on vibes), **sheep** (follows the crowd), **contrarian** (doubts
+whatever's popular), **showman** (loves the drama) — that shapes its
+credulity, its table talk, and how it votes. Bot names come from a 45-name
+pool, picked at random, with proper animal avatars and a small 🤖 tag.
+The solo debug panel shows each bot's persona.
+
 ### Quality of life
 
 - **Host resume** — the game snapshots itself locally on every change; if the
@@ -103,8 +112,19 @@ turning the setting away unticks the roles.
 - 📖 **In-app role guide** on every screen.
 - 📋 **Copy result summary** on the game-over screen, plus a full recap of
   every player's night actions.
+- 📜 **"The story so far"** card each day (who's dead and how, alive count)
+  and a collapsible **🗳 Past votes** history of who voted for whom.
+- **Avatar rings** — gold for the public Mayor, grey for the dead.
+- 📈 **Per-device record** (games, wins by side, survivals) on the home and
+  game-over screens; spectators can whisper with the dead while they wait to
+  be dealt in.
+- **Danger chime + buzz** when you're poisoned; a soft heartbeat in the last
+  ten seconds of the vote clock.
 - Join-side **debug log + ICE probe** (with copy button) for diagnosing
   connection problems.
+- **Localisation scaffold** — `js/i18n.js` holds a string table with
+  `?lang=xx` selection; shell screens are wired, in-game strings migrate
+  incrementally. Add a language by copying the `en` block.
 
 ### Roles
 
