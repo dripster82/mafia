@@ -270,17 +270,27 @@ const Player = (() => {
       const pill = el(pillId);
       if (pill) pill.textContent = 'Room: ' + msg.roomCode;
     } else if (msg.t === 'state') {
-      if (!local && msg.view.phase !== lastLoggedPhase) {
-        lastLoggedPhase = msg.view.phase;
-        dbg(`state received: phase=${msg.view.phase} players=${msg.view.players.length}`);
+      const prevPhase = view ? view.phase : null;
+      if (msg.view) {
+        view = msg.view; // full state (first contact / rejoin)
+      } else if (msg.d && view) {
+        // Delta: only what changed since the last state; chat arrives as appends.
+        if (msg.set) Object.assign(view, msg.set);
+        if (msg.del) msg.del.forEach(k => { delete view[k]; });
+        if (msg.chatAppend) view.chat = (view.chat || []).concat(msg.chatAppend).slice(-150);
+        if (msg.mafiaChatAppend) view.mafiaChat = (view.mafiaChat || []).concat(msg.mafiaChatAppend).slice(-60);
+      } else {
+        return; // a delta before any full state — wait for the full one
       }
-      if (msg.view.phase === 'lobby' && (!view || view.phase !== 'lobby')) {
+      if (!local && view.phase !== lastLoggedPhase) {
+        lastLoggedPhase = view.phase;
+        dbg(`state received: phase=${view.phase} players=${view.players.length}`);
+      }
+      if (view.phase === 'lobby' && prevPhase !== 'lobby') {
         // A new game is forming — clear leftovers from the previous one.
         intel = [];
         roleRevealed = false;
       }
-      const prevPhase = view ? view.phase : null;
-      view = msg.view;
       if (nameDraft !== null && view.you.name === nameDraft.trim()) nameDraft = null;
       maybeAnimatePhase(prevPhase, view.phase, view.dayNum);
       // A soft cue the first time each night that YOU have an action pending.

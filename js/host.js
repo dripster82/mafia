@@ -151,6 +151,7 @@ const Host = (() => {
   }
 
   function destroy() {
+    viewCache = {};
     announcePublic(true);
     clearInterval(lobbyBeacon);
     if (peer) { try { peer.destroy(); } catch (e) {} }
@@ -852,6 +853,7 @@ const Host = (() => {
     p.connected = true;
     conn._playerId = p.id;
     conns[p.id] = conn;
+    delete viewCache[p.id]; // a (re)joined device gets a full view first
     conn.send({ t: 'joined', playerId: p.id, roomCode });
     broadcast();
   }
@@ -874,6 +876,8 @@ const Host = (() => {
     seat.connected = true;
     conn._playerId = seat.id;
     conns[seat.id] = conn;
+    delete viewCache[p.id];
+    delete viewCache[seat.id]; // the new occupant needs the full picture
     addLog(`${seat.name} took over ${oldName === seat.name ? 'an abandoned seat' : `${oldName}'s seat`}.`, true);
     conn.send({ t: 'joined', playerId: seat.id, roomCode });
     broadcast();
@@ -2431,8 +2435,62 @@ const Host = (() => {
 
   /* ---------------- per-player state views ---------------- */
 
+  /* Per-player cache of the last view sent, for delta updates. */
+  let viewCache = {};
+
+  function snapshotView(view) {
+    const keys = {};
+    Object.keys(view).forEach(k => {
+      if (k === 'chat' || k === 'mafiaChat') return;
+      keys[k] = JSON.stringify(view[k] === undefined ? null : view[k]);
+    });
+    return {
+      keys,
+      chat: view.chat ? view.chat.map(m => JSON.stringify(m)) : undefined,
+      mafiaChat: view.mafiaChat ? view.mafiaChat.map(m => JSON.stringify(m)) : undefined,
+    };
+  }
+
+  /* Send a player their state: the full view on first contact, then only
+   * what changed (chat travels as appends) — a big saving on TURN relays. */
+  function sendView(p) {
+    const c = conns[p.id];
+    if (!c || !c.open) return;
+    if (p.isBot) { try { c.send({ t: 'state' }); } catch (e) {} return; } // bots only need the wake-up
+    const view = viewFor(p);
+    const cache = viewCache[p.id];
+    const fresh = snapshotView(view);
+    viewCache[p.id] = fresh;
+    if (!cache) {
+      try { c.send({ t: 'state', view }); } catch (e) {}
+      return;
+    }
+    const msg = { t: 'state', d: 1 };
+    const set = {};
+    const del = [];
+    Object.keys(fresh.keys).forEach(k => {
+      if (cache.keys[k] !== fresh.keys[k]) set[k] = view[k];
+    });
+    Object.keys(cache.keys).forEach(k => { if (!(k in fresh.keys)) del.push(k); });
+    ['chat', 'mafiaChat'].forEach(k => {
+      const oldS = cache[k];
+      const newS = fresh[k];
+      if (newS === undefined) { if (oldS !== undefined) del.push(k); return; }
+      if (oldS === undefined) { set[k] = view[k]; return; }
+      let prefix = oldS.length <= newS.length;
+      for (let i = 0; prefix && i < oldS.length; i++) if (oldS[i] !== newS[i]) prefix = false;
+      if (prefix) {
+        if (newS.length > oldS.length) msg[k + 'Append'] = view[k].slice(oldS.length);
+      } else set[k] = view[k];
+    });
+    if (Object.keys(set).length) msg.set = set;
+    if (del.length) msg.del = del;
+    if (!msg.set && !msg.del && !msg.chatAppend && !msg.mafiaChatAppend) return; // nothing changed
+    try { c.send(msg); } catch (e) {}
+  }
+
   function broadcast() {
-    G.players.forEach(p => send(p.id, { t: 'state', view: viewFor(p) }));
+    G.players.forEach(p => sendView(p));
     render();
     saveSnapshot();
     // Keep the public listing's names/counts fresh as the lobby changes:
