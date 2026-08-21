@@ -147,6 +147,14 @@ input[type="text"]:focus { border-color: var(--accent); }
 .day-summary { padding: 12px 16px; }
 .vote-history { padding: 12px 16px; }
 .vote-history summary { cursor: pointer; font-size: 0.92rem; }
+/* Host-only panels fold away during the game. */
+.host-fold { margin-top: 16px; }
+.host-fold > summary {
+  cursor: pointer; font-weight: 600; font-size: 0.92rem; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 16px;
+}
+.host-fold[open] > summary { margin-bottom: 10px; color: var(--text); }
 .chat-new-pill {
   position: fixed; bottom: 68px; left: 50%; transform: translateX(-50%); z-index: 60;
   background: var(--panel2); color: var(--text); border: 1px solid var(--line);

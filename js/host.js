@@ -33,6 +33,7 @@ const Host = (() => {
   let lastAnnounce = 0;   // throttle join/leave-triggered announcements
   let pendingAnnounce = null; // trailing announce when a change hits the throttle
   let voteCloseTimer = null; // short pause between the last vote and the verdict
+  let hostPanelOpen = false; // in-game host panels fold away by default
   let verdictTimer = null;   // when the verdict screen moves on
 
   function deckOpts() {
@@ -834,6 +835,7 @@ const Host = (() => {
       }
     });
     G.gameId = 'g' + Math.random().toString(36).slice(2, 10);
+    hostPanelOpen = false; // fresh game, panels folded again
     // Each executioner gets a personal grudge against a random townsperson.
     G.players.filter(p => p.role === 'executioner').forEach(ex => {
       const towns = G.players.filter(t => t.id !== ex.id && ROLES[t.role].team === 'town');
@@ -2452,8 +2454,19 @@ const Host = (() => {
         </div>`;
     }
 
-    html += logHTML();
+    // During the game, the host's extra panels fold away so their screen
+    // looks like everyone else's; the lobby keeps them open (they ARE the UI).
+    if (G.phase === 'lobby') {
+      html += logHTML();
+    } else {
+      const openNow = G.phase === 'ended' ? true : hostPanelOpen;
+      html = `<details class="host-fold" id="host-fold" ${openNow ? 'open' : ''}>
+        <summary>🛠 Host controls &amp; public log</summary>${html}${logHTML()}</details>`;
+    }
     c.innerHTML = html;
+
+    const fold = el('host-fold');
+    if (fold) fold.ontoggle = () => { hostPanelOpen = fold.open; };
 
     const on = (id, fn) => { const b = el(id); if (b) b.onclick = fn; };
     on('btn-start', startGame);
