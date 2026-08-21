@@ -394,7 +394,11 @@ const Player = (() => {
   function playersListHTML(withVotes) {
     const counts = (view.vote && view.vote.counts) || {};
     const deadLabel = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding' };
-    return `<div class="card"><h3>Players</h3><div class="tile-grid">${
+    // The host manages the table from here: add-bot lives in the header so
+    // it stays put as the gallery grows, kicks sit on the tiles themselves.
+    const addBot = view.phase === 'lobby' && view.you.isHost
+      ? '<button id="btn-add-bot" class="btn small">🤖 Add a bot</button>' : '';
+    return `<div class="card"><div class="section-title"><h3>Players</h3>${addBot}</div><div class="tile-grid">${
       view.players.map(p => {
         const tags = [];
         if (p.pledged && p.alive) tags.push('<span class="tag tag-gold">🎖 Mayor</span>');
@@ -406,7 +410,9 @@ const Player = (() => {
           tags.push(`<button class="tag tag-btn" data-ach="${p.id}">🏆 ${p.achievements.length}</button>`);
         else if (p.achCount) tags.push(`<span class="tag tag-dim">🏆 ${p.achCount}</span>`);
         const mark = view.phase !== 'lobby' && view.phase !== 'ended' && p.id !== view.you.id
-          ? `<button class="mark-btn tile-mark" data-mark="${p.id}" title="Your private read">${markIcon(p.id) || '❓'}</button>` : '';
+          ? `<button class="mark-btn tile-mark" data-mark="${p.id}" title="Your private read">${markIcon(p.id) || '❓'}</button>`
+          : view.phase === 'lobby' && view.you.isHost && p.id !== view.you.id
+          ? `<button class="mark-btn tile-mark tile-kick" data-kick="${p.id}" title="Remove from the game">✕</button>` : '';
         return `<div class="tile ${p.alive ? '' : 'dead'}">
           ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : `<span class="tile-skull">${p.spectator ? '👁' : '💀'}</span>`}
           ${mark}
@@ -907,8 +913,8 @@ const Player = (() => {
           ${view.settings.rumourDays === 0 ? ' · No rumours' : view.settings.rumourDays === 1 ? ' · Daily rumours' : ''}<br>
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
+      html += playersListHTML(false);
       html += profileCardHTML();
-      html += chatCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
           <div class="muted small-text">Invite others — scan to join room <strong>${esc(view.roomCode)}</strong></div>
@@ -916,7 +922,7 @@ const Player = (() => {
           <div class="url">${esc(App.joinLinkFor(view.roomCode))}</div>
         </div>`;
       }
-      html += playersListHTML(false);
+      html += chatCardHTML();
     }
 
     /* ----- verdict reveal (short pause before night) ----- */
@@ -1261,6 +1267,11 @@ const Player = (() => {
     c.querySelectorAll('[data-takeover]').forEach(b => {
       b.onclick = () => sendAction({ t: 'takeover', targetId: b.dataset.takeover });
     });
+    c.querySelectorAll('[data-kick]').forEach(b => {
+      b.onclick = () => sendAction({ t: 'kick', targetId: b.dataset.kick });
+    });
+    const ab = el('btn-add-bot');
+    if (ab && view.you.isHost) ab.onclick = () => sendAction({ t: 'addBot' });
     c.querySelectorAll('[data-mark]').forEach(b => {
       b.onclick = e => {
         e.stopPropagation();

@@ -418,6 +418,9 @@ const Host = (() => {
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
     if (msg.t === 'chat') return handleChat(p, msg.text, msg.chan);
     if (msg.t === 'takeover') return handleTakeover(p, conn, msg.targetId);
+    // Table management comes only from the host's own seat — never the network.
+    if (msg.t === 'kick' && conn === localConn && G.phase === 'lobby') return kickPlayer(msg.targetId);
+    if (msg.t === 'addBot' && conn === localConn && G.phase === 'lobby') return addBot();
     if (msg.t === 'achShare') {
       if (Array.isArray(msg.ach)) p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
       return;
@@ -2826,6 +2829,7 @@ const Host = (() => {
         id: p.id, name: p.name, alive: p.alive, avatar: p.avatar, spectator: !!p.spectator,
         role: G.phase === 'lobby' ? null : p.role,
         info: G.phase === 'lobby' ? [] : roleInfoFor(p),
+        isHost: !!(localConn && p.id === localConn._playerId),
       },
       players: G.players.map(t => ({
         id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
@@ -3061,18 +3065,11 @@ const Host = (() => {
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
             <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n, deckOpts())) : `need ${MIN_PLAYERS - n} more`}</span></div>
-          <div class="player-list">${G.players.map(p => `
-            <div class="player-row">
-              <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-              <span class="name">${p.avatar || ''} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
-              ${localConn && p.id === localConn._playerId ? '' : `<button class="btn small ghost" data-kick="${p.id}">✕</button>`}
-            </div>`).join('')}</div>
-          <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
+          <button id="btn-start" class="btn primary big" style="margin-top:10px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
             ${n < MIN_PLAYERS ? `Need at least ${MIN_PLAYERS} players` : `Start game with ${n} players`}
           </button>
-          <button id="btn-add-bot" class="btn" style="margin-top:8px;width:100%">🤖 Add a bot player</button>
           <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.
-          Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
+          Everyone appears in the Players list above — kick with ✕ there. Bots fill empty seats so you can try the game solo.</p>
         </div>
         <div class="card"><h3>Game options</h3>
           <label class="opt"><input type="checkbox" id="opt-safe-night" ${settings.safeFirstNight ? 'checked' : ''}>
@@ -3190,7 +3187,6 @@ const Host = (() => {
     on('btn-restart', () => {
       if (confirm('Restart the game? The current game is abandoned — roles are discarded and everyone returns to the lobby.')) playAgain();
     });
-    on('btn-add-bot', addBot);
     on('btn-force-reveal', () => { if (confirm('Begin the first night now, even though not everyone has confirmed?')) startNight(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);

@@ -544,6 +544,7 @@ select {
   font-size: 0.8rem;
   cursor: pointer;
 }
+.tile-kick { color: var(--blood); font-weight: 700; }
 .tile-av { font-size: 1.9rem; line-height: 1.2; margin-top: 2px; }
 .tile-name { font-size: 0.8rem; font-weight: 600; word-break: break-word; }
 .tile-tags { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; margin-top: 3px; }
