@@ -179,9 +179,10 @@ function deckComposition(n, opts) {
   } else {
     comp.mafia = nMafia;
   }
-  comp.doctor = 1;
-  comp.detective = 1;
-  let used = nMafia + 2;
+  // Doctor and Detective are dealt by default, but a host can turn them off.
+  let used = nMafia;
+  if (en.doctor !== false) { comp.doctor = 1; used++; }
+  if (en.detective !== false) { comp.detective = 1; used++; }
   OPTIONAL_ROLES.forEach(r => {
     if (en[r] && n > used) { comp[r] = 1; used++; }
   });

@@ -23,7 +23,8 @@ const Host = (() => {
     publicGame: false,   // list this lobby on the join page's public directory
     revealOnDeath: true, // a dead player's role is made public (Coroner/Bookkeeper need it OFF)
     nightTimer: 120, dayTimer: 300,
-    roles: { don: false, bodyguard: false, vigilante: false, watcher: false,
+    roles: { detective: true, doctor: true, // core pair, on unless turned off
+             don: false, bodyguard: false, vigilante: false, watcher: false,
              tracker: false, coroner: false, bookkeeper: false, mayor: false,
              mortician: false, fixer: false, framer: false, poisoner: false,
              consigliere: false, forger: false, cleaner: false, recruiter: false,
@@ -328,6 +329,7 @@ const Host = (() => {
     if (msg.t === 'confirm') return handleConfirm(p);
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
     if (msg.t === 'chat') return handleChat(p, msg.text, msg.chan);
+    if (msg.t === 'takeover') return handleTakeover(p, conn, msg.targetId);
     if (msg.t === 'achShare') {
       if (Array.isArray(msg.ach)) p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
       return;
@@ -854,6 +856,29 @@ const Host = (() => {
     broadcast();
   }
 
+  /* A spectator claims an abandoned seat: a disconnected, living human's
+   * player — role, memories and all — passes to the newcomer. */
+  function handleTakeover(p, conn, targetId) {
+    if (!p.spectator || G.phase === 'lobby' || G.phase === 'ended') return;
+    const seat = getPlayer(targetId);
+    if (!seat || seat.isBot || seat.connected || !seat.alive || !seat.role) return;
+    // The spectator's own record dissolves; their connection takes the seat.
+    G.players = G.players.filter(x => x.id !== p.id);
+    delete conns[p.id];
+    const oldName = seat.name;
+    if (!G.players.some(x => x.id !== seat.id && x.name.toLowerCase() === p.name.toLowerCase())) {
+      seat.name = p.name;
+      seat.avatar = p.avatar || seat.avatar;
+    }
+    if (Array.isArray(p.achShare)) seat.achShare = p.achShare;
+    seat.connected = true;
+    conn._playerId = seat.id;
+    conns[seat.id] = conn;
+    addLog(`${seat.name} took over ${oldName === seat.name ? 'an abandoned seat' : `${oldName}'s seat`}.`, true);
+    conn.send({ t: 'joined', playerId: seat.id, roomCode });
+    broadcast();
+  }
+
   /* Lobby-only: rename and avatar changes. */
   function handleProfile(p, msg) {
     if (G.phase !== 'lobby') return;
@@ -964,6 +989,7 @@ const Host = (() => {
     G.phase = 'night';
     G.night = { actions: {} };
     G.votes = null;
+    G.runoff = null;
     // Chat history survives the night — a divider marks where the new round starts.
     G.chat.push({ divider: `Round ${G.dayNum}` });
     // Yesterday's accusations fade, but aren't forgotten.
@@ -1556,6 +1582,9 @@ const Host = (() => {
 
   /* Ghosts with an unspent last vote must decide each day: cast it or save it. */
   function pendingGhosts() {
+    if (G.runoff) {
+      return G.players.filter(x => G.runoff.ghostIds.includes(x.id) && !(x.id in G.votes));
+    }
     return G.players.filter(x => ghostCanVote(x) && !(x.id in G.votes) && !G.ghostSaves[x.id]);
   }
 
@@ -1573,6 +1602,18 @@ const Host = (() => {
 
   function handleVote(p, targetId) {
     if (G.phase !== 'day') return;
+    if (G.runoff) {
+      // Runoff ballot: tied candidates or abstain; eligible ghosts vote like
+      // the living (their ghost vote was already spent this round).
+      const eligible = p.alive || G.runoff.ghostIds.includes(p.id);
+      const valid = targetId === 'nobody' ||
+        (G.runoff.candidates.includes(targetId) && targetId !== p.id);
+      if (!eligible || !valid) return;
+      G.votes[p.id] = targetId;
+      maybeCloseVoting();
+      broadcast();
+      return;
+    }
     if (!p.alive) {
       // One vote from beyond the grave — cast it, save it, or take it back.
       if (!ghostCanVote(p)) return;
@@ -1606,7 +1647,39 @@ const Host = (() => {
     broadcast();
   }
 
+  /* A bot's runoff ballot: mafia protect the family, town vote their top
+   * suspect of the two, abstain when they truly can't pick. */
+  function runoffPickFor(p) {
+    const cands = G.runoff.candidates.filter(id => id !== p.id);
+    if (!cands.length) return 'nobody';
+    if (teamOf(p) === 'mafia') {
+      const townCand = cands.find(id => teamOf(getPlayer(id)) !== 'mafia');
+      if (townCand) return townCand;
+      return 'nobody';
+    }
+    let best = cands[0];
+    cands.forEach(id => { if (suspOf(p, id) > suspOf(p, best)) best = id; });
+    if (suspOf(p, best) > 0) return best;
+    return Math.random() < 0.5 ? best : 'nobody';
+  }
+
   function forceEndVoting() { resolveVote(true); }
+
+  /* A tied vote between players triggers one runoff: everyone alive — plus
+   * the ghosts who spent their vote this round — votes again between the
+   * tied candidates, or abstains. A second tie eliminates no one. */
+  function startRunoff(candidateIds, ghostVoters) {
+    G.runoff = { day: G.dayNum, candidates: candidateIds, ghostIds: ghostVoters.map(v => v.id) };
+    G.votes = {};
+    G.ghostSaves = {};
+    G.voteClosing = false;
+    G.lastChatAt = Date.now();
+    addLog(`⚖️ The vote tied between ${candidateIds.map(nameOf).join(' and ')} — runoff! Vote for one of them, or abstain.`, true);
+    setPhaseTimer(120, () => { if (G && G.phase === 'day') resolveVote(true); });
+    // Bots need a fresh look at the shorter ballot.
+    G.players.forEach(x => { if (x.isBot) x.chatIntent = null; });
+    broadcast();
+  }
 
   function resolveVote(forced) {
     if (G.phase !== 'day') return;
@@ -1641,10 +1714,16 @@ const Host = (() => {
         addLog('No majority was reached — no one was eliminated.');
       }
     } else if (top.length > 1) {
-      addLog('The vote was tied — no one was eliminated.');
+      const tiedPlayers = top.filter(t => t !== 'nobody');
+      if (!G.runoff && tiedPlayers.length >= 2 && !forced) {
+        startRunoff(tiedPlayers, ghostVoters);
+        return; // the day continues: everyone votes again between the tied
+      }
+      addLog(G.runoff ? 'The runoff tied too — no one was eliminated.' : 'The vote was tied — no one was eliminated.');
     } else {
       addLog('The town chose to eliminate no one.');
     }
+    G.runoff = null;
 
     // ---- achievement bookkeeping for this vote ----
     Object.entries(G.votes).forEach(([voterId, t]) => {
@@ -2247,7 +2326,12 @@ const Host = (() => {
     if (!p) return;
     // Dead bots decide their ghost vote: cast it on a strong lead, else save it.
     if (!p.alive) {
-      if (G.phase === 'day' && ghostCanVote(p) && !(p.id in G.votes) && !G.ghostSaves[p.id]) {
+      if (G.phase === 'day' && G.runoff && G.runoff.ghostIds.includes(p.id) && !(p.id in G.votes)) {
+        if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        handleVote(p, runoffPickFor(p));
+        return;
+      }
+      if (G.phase === 'day' && !G.runoff && ghostCanVote(p) && !(p.id in G.votes) && !G.ghostSaves[p.id]) {
         if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
         const known = p.intel && p.intel.map(i => getPlayer(i.targetId)).filter(t => t && t.alive && teamOf(t) === 'mafia');
         const pick = (known && known.length) ? known[0] : botSuspicionPick(p, 3);
@@ -2313,6 +2397,7 @@ const Host = (() => {
         // Votes wait until the table has been quiet for a while, so they're
         // cast on everything that was said — not on first impressions.
         if (Date.now() - (G.lastChatAt || 0) < 6000) { scheduleBot(conn); return; }
+        if (G.runoff) { handleVote(p, runoffPickFor(p)); return; }
         // Start from what the bot declared at the table; decide fresh if it
         // never spoke today or its declared target has since died.
         let target = null;
@@ -2504,6 +2589,13 @@ const Host = (() => {
       view.canChat = true;
     }
 
+    // Spectators can claim seats whose humans have walked away mid-game.
+    if (p.spectator && G.phase !== 'lobby' && G.phase !== 'ended') {
+      const abandoned = G.players.filter(t => !t.isBot && !t.connected && t.alive && t.role)
+        .map(t => ({ id: t.id, name: t.name, avatar: t.avatar }));
+      if (abandoned.length) view.abandoned = abandoned;
+    }
+
     // The mafia's private channel runs day and night.
     if ((G.phase === 'day' || G.phase === 'night') && p.alive && p.role && teamOf(p) === 'mafia') {
       view.mafiaChat = G.chat.filter(m => m.chan === 'mafia').slice(-60);
@@ -2526,13 +2618,19 @@ const Host = (() => {
         needed: alivePlayers().length,
         majority: Math.floor(aliveWeight / 2) + 1,
         closing: !!G.voteClosing,
-        ghost: ghostCanVote(p),
+        ghost: G.runoff ? false : ghostCanVote(p),
         ghostSaved: !!G.ghostSaves[p.id],
         ghostsPending: pendingGhosts().length,
         ghostSpent: !p.alive && !p.spectator && !!p.ghostVoteUsed && settings.ghostVote,
         // The whole roster: the fallen stay in the list (not votable) so the
         // day screen shows who's already gone.
-        targets: G.players.filter(t => !t.spectator).map(t => ({
+        runoff: G.runoff ? {
+          names: G.runoff.candidates.map(nameOf),
+          eligible: p.alive || G.runoff.ghostIds.includes(p.id),
+        } : null,
+        targets: (G.runoff
+          ? G.players.filter(t => G.runoff.candidates.includes(t.id))
+          : G.players.filter(t => !t.spectator)).map(t => ({
           id: t.id, name: t.name, avatar: t.avatar, self: t.id === p.id,
           isBot: !!t.isBot, pledged: !!t.pledged,
           dead: !t.alive, causeOfDeath: t.alive ? null : t.causeOfDeath,
@@ -2636,7 +2734,7 @@ const Host = (() => {
   };
 
   const ROLE_GROUPS = [
-    { title: '🏘 Village', roles: ['bodyguard', 'vigilante', 'watcher', 'tracker', 'coroner', 'bookkeeper', 'mayor', 'mortician'] },
+    { title: '🏘 Village', roles: ['detective', 'doctor', 'bodyguard', 'vigilante', 'watcher', 'tracker', 'coroner', 'bookkeeper', 'mayor', 'mortician'] },
     { title: '🔪 Mafia', roles: ['don', 'fixer', 'framer', 'poisoner', 'consigliere', 'forger', 'cleaner', 'recruiter'] },
     { title: '🎭 Neutral', roles: ['jester', 'executioner', 'drifter'] },
   ];

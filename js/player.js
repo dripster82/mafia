@@ -596,6 +596,16 @@ const Player = (() => {
       s.n1Streak = r.youDiedNight1 ? (s.n1Streak || 0) + 1 : 0;
       if (view.you.alive) s.survived = (s.survived || 0) + 1;
       localStorage.setItem('mafia-stats', JSON.stringify(s));
+      // Append this game to the device's history (newest first, capped).
+      try {
+        const hist = JSON.parse(localStorage.getItem('mafia-history') || '[]');
+        hist.unshift({
+          ts: Date.now(), role: view.you.role, won: !!r.youWon,
+          survived: !!view.you.alive, winner: view.winner || null,
+          players: (r.all || []).length,
+        });
+        localStorage.setItem('mafia-history', JSON.stringify(hist.slice(0, 50)));
+      } catch (e) {}
       // Cross-game achievements come from the device's own record;
       // single-game ones arrive from the host with the recap.
       const cross = [];
@@ -637,7 +647,24 @@ const Player = (() => {
         ${s.townWins ? ` · 🏘 ${s.townWins} as village` : ''}
         ${s.mafiaWins ? ` · 🔪 ${s.mafiaWins} as mafia` : ''}
         ${s.soloWins ? ` · 🎭 ${s.soloWins} solo` : ''}
-        ${s.survived ? ` · 🌅 survived ${s.survived}` : ''}</p></div>`;
+        ${s.survived ? ` · 🌅 survived ${s.survived}` : ''}</p>
+      ${historyListHTML()}</div>`;
+  }
+
+  /* Recent games on this device, folded under the record. */
+  function historyListHTML() {
+    let hist = [];
+    try { hist = JSON.parse(localStorage.getItem('mafia-history') || '[]'); } catch (e) {}
+    if (!hist.length) return '';
+    return `<details style="margin-top:8px"><summary class="small-text muted" style="cursor:pointer">Past games (${hist.length})</summary>${
+      hist.slice(0, 15).map(h => {
+        const d = new Date(h.ts);
+        const when = `${d.getDate()}/${d.getMonth() + 1} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        const role = ROLES[h.role] ? `${ROLES[h.role].icon} ${ROLES[h.role].name}` : '?';
+        return `<p class="small-text" style="margin:6px 0"><span class="muted">${when}</span> · ${role} ·
+          ${h.won ? '<strong>won</strong> 🏆' : 'lost'}${h.survived ? ' · survived' : ''} <span class="muted">· ${h.players} players</span></p>`;
+      }).join('')
+    }</details>`;
   }
 
   /* Trophy room: a 🏆 button on every screen. Shows your own cabinet, or —
@@ -815,6 +842,12 @@ const Player = (() => {
             <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
       html += announceHTML();
       html += daySummaryHTML();
+      if (view.you.spectator && view.abandoned && view.abandoned.length) {
+        html += `<div class="card"><h3>🪑 Abandoned seats</h3>
+          <p class="muted small-text" style="margin:4px 0 10px">These players left mid-game — take one over and play their role from here.</p>
+          <div class="target-grid">${view.abandoned.map(a =>
+            `<button class="btn" data-takeover="${a.id}">${a.avatar || ''} ${esc(a.name)} — take over</button>`).join('')}</div></div>`;
+      }
       // During the day the dead see the vote list (their ghost vote if they
       // have one, read-only otherwise) — no separate players list.
       if (view.phase === 'day' && view.vote) {
@@ -830,11 +863,13 @@ const Player = (() => {
             ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
           </div>`;
         } else {
+          const runoffBallot = v.runoff && v.runoff.eligible;
           html += `<div class="card">
-            <div class="section-title"><h3>🗳 The vote</h3>
+            <div class="section-title"><h3>${runoffBallot ? '⚖️ Runoff — your voice counts' : '🗳 The vote'}</h3>
             <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-            ${v.ghostSpent ? '<p class="muted small-text" style="margin-bottom:10px">👻 Your last vote has been spent.</p>' : ''}
-            ${voteGridHTML(v, { includeNobody: true, readonly: true })}
+            ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ Tie between ${v.runoff.names.map(esc).join(' and ')}${runoffBallot ? ' — you voted this round, so vote again or abstain.' : '.'}</p>` : ''}
+            ${!v.runoff && v.ghostSpent ? '<p class="muted small-text" style="margin-bottom:10px">👻 Your last vote has been spent.</p>' : ''}
+            ${voteGridHTML(v, { includeNobody: true, readonly: !runoffBallot })}
             ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
               : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
           </div>`;
@@ -916,6 +951,7 @@ const Player = (() => {
       html += `<div class="card">
         <div class="section-title"><h3>Vote to eliminate</h3>
         <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+        ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ <strong>Runoff!</strong> The vote tied between ${v.runoff.names.map(esc).join(' and ')} — pick one of them, or abstain.</p>` : ''}
         <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
         A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
         ${votePressureHTML(v)}
@@ -1100,6 +1136,9 @@ const Player = (() => {
     if (to) to.onclick = e => { if (e.target === to) { trophyOpen = false; trophyViewId = null; render(); } };
     c.querySelectorAll('[data-ach]').forEach(b => {
       b.onclick = () => { trophyViewId = b.dataset.ach; trophyOpen = true; render(); };
+    });
+    c.querySelectorAll('[data-takeover]').forEach(b => {
+      b.onclick = () => sendAction({ t: 'takeover', targetId: b.dataset.takeover });
     });
 
     const copyBtn = el('btn-copy-result');
