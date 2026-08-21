@@ -401,7 +401,9 @@ const Player = (() => {
     return `<div class="card"><div class="section-title"><h3>Players</h3>${addBot}</div><div class="tile-grid">${
       view.players.map(p => {
         const tags = [];
-        if (p.pledged && p.alive) tags.push('<span class="tag tag-gold">🎖 Mayor</span>');
+        // If their role tag already reads "Mayor" (your own card, or a
+        // revealed role), the pledge badge would be the same pin twice.
+        if (p.pledged && p.alive && p.role !== 'mayor') tags.push('<span class="tag tag-gold">🎖 Mayor</span>');
         if (p.poisoned) tags.push('<span class="tag tag-red">☠️ poisoned</span>');
         if (p.role) tags.push(`<span class="tag role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>`);
         if (withVotes && counts[p.id]) tags.push(`<span class="tag">${counts[p.id]} 🗳</span>`);
