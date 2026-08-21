@@ -465,15 +465,18 @@ select {
 .role-card::before {
   content: 'CONFIDENTIAL';
   position: absolute;
-  top: 10px; right: -34px;
+  top: 26px; right: -48px;
+  width: 190px;
+  text-align: center;
   transform: rotate(38deg);
   font-size: 0.6rem;
   font-weight: 700;
-  letter-spacing: 0.3em;
+  letter-spacing: 0.28em;
+  text-indent: 0.28em;
   color: var(--blood);
   border-top: 1px solid var(--blood-deep);
   border-bottom: 1px solid var(--blood-deep);
-  padding: 2px 36px;
+  padding: 3px 0;
   opacity: 0.75;
 }
 .role-card.concealed {
@@ -653,6 +656,39 @@ div.vote-line { cursor: default; }
   font-size: 0.85rem;
   line-height: 1.4;
 }
+
+/* Ballot tiles — the vote list wears the same avatar cards as the town. */
+.target-grid.vote-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.vote-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 16px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+  font-family: var(--body);
+  font-size: 0.9rem;
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.06s ease, border-color 0.15s ease;
+}
+button.vote-tile:active { transform: translate(2px, 2px); }
+div.vote-tile { cursor: default; }
+.vote-tile.leading { border-color: var(--gold); box-shadow: 3px 3px 0 rgba(217, 165, 66, 0.22); }
+.vote-tile.selected { border-color: var(--blood); background: var(--blood-dim); box-shadow: 3px 3px 0 rgba(217, 67, 67, 0.28); }
+.vote-tile.dead-row { opacity: 0.5; background: var(--bg-deep); }
+.vote-tile.self-row { border-style: dashed; }
+.vote-tile .vote-under { font-size: 0.72rem; color: var(--muted); margin-top: 2px; word-break: break-word; }
+.tile-count { position: absolute; top: 3px; left: 3px; }
+.grid-span { grid-column: 1 / -1; text-align: center; }
 
 .vote-pressure {
   text-align: center;

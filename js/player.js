@@ -441,34 +441,34 @@ const Player = (() => {
       avatar: t.avatar, name: t.name, poisoned: t.poisoned,
     }));
     if (opts.includeNobody) rows.push({ id: 'nobody', avatar: '🕊', name: 'No one' });
-    // The row closest to elimination gets highlighted.
+    // The tile closest to elimination gets highlighted.
     let leadId = null, leadN = 0;
     v.targets.forEach(t => { const n = v.counts[t.id] || 0; if (!t.dead && n > leadN) { leadN = n; leadId = t.id; } });
-    return `<div class="target-grid">${
+    // Ballot tiles — the same avatar cards as the town gallery: tap to vote.
+    return `<div class="target-grid vote-tiles">${
       rows.map(t => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
         const count = v.counts[t.id] || 0;
-        // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
-        const who = `<span class="vote-who">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}
-          <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
-          ${markIcon(t.id) ? `<span class="mark-badge">${markIcon(t.id)}</span>` : ''}
-          ${t.isBot ? '<span class="bot-tag">🤖</span>' : ''}
-          ${t.poisoned ? '<span>☠️</span>' : ''}
-          ${t.role ? `<span class="vote-roleic">${ROLES[t.role].icon}</span>` : ''}</span>`;
-        const pill = t.dead
-          ? `<span class="vote-deadpill">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`
-          : count ? `<span class="vote-count-pill">${count} 🗳</span>` : '';
+        const tags = [];
+        if (t.isBot) tags.push('<span class="tag tag-dim">🤖 bot</span>');
+        if (t.poisoned) tags.push('<span class="tag tag-red">☠️</span>');
+        if (t.role) tags.push(`<span class="tag">${ROLES[t.role].icon} ${ROLES[t.role].name}</span>`);
+        if (t.dead) tags.push(`<span class="tag tag-dim">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`);
         const markCtl = !t.dead && !t.self && t.id !== 'nobody'
-          ? `<span class="mark-btn vote-mark" data-mark="${t.id}" title="Your private read">${markIcon(t.id) || '❓'}</span>`
+          ? `<span class="mark-btn tile-mark" data-mark="${t.id}" title="Your private read">${markIcon(t.id) || '❓'}</span>`
           : '';
-        const inner = `<span class="vote-top">${who}<span class="vote-side">${markCtl}${pill}</span></span>
+        const inner = `${markCtl}
+          ${count ? `<span class="vote-count-pill tile-count">${count} 🗳</span>` : ''}
+          <span class="tile-av">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}</span>
+          <span class="tile-name vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
+          ${tags.length ? `<span class="tile-tags">${tags.join('')}</span>` : ''}
           ${votersHere ? `<span class="vote-under">↳ ${votersHere}</span>` : ''}`;
-        const cls = `btn vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row' : ''}${t.self ? ' self-row' : ''}`;
+        const cls = `tile vote-tile vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row dead' : ''}${t.self ? ' self-row' : ''}`;
         return (t.dead || t.self || opts.readonly)
           ? `<div class="${cls}">${inner}</div>`
-          : `<button class="${cls} ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
+          : `<button class="${cls} ${v.yourVote === t.id ? ' selected' : ''}" data-vote="${t.id}">${inner}</button>`;
       }).join('')
-    }${opts.retract && v.yourVote ? '<button class="btn ghost" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
+    }${opts.retract && v.yourVote ? '<button class="btn ghost grid-span" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
   }
 
   /* Day-phase table talk. */
@@ -1276,6 +1276,25 @@ const Player = (() => {
         render();
       };
     });
+    // Swipe left/right anywhere on a pane to move between tabs (phones).
+    const panesEl = c.querySelector('.panes');
+    if (panesEl) {
+      let sx = 0, sy = 0;
+      panesEl.addEventListener('touchstart', e => {
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      }, { passive: true });
+      panesEl.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - sx;
+        const dy = e.changedTouches[0].clientY - sy;
+        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        const order = ['you', 'town', 'chat'];
+        const i = order.indexOf(activeTab) + (dx < 0 ? 1 : -1);
+        if (i < 0 || i >= order.length) return;
+        activeTab = order[i];
+        if (activeTab === 'chat') chatSeenLen = view && view.chat ? view.chat.length : 0;
+        render();
+      }, { passive: true });
+    }
 
     const copyBtn = el('btn-copy-result');
     if (copyBtn) copyBtn.onclick = () => {
