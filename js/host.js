@@ -406,7 +406,9 @@ const Host = (() => {
   function suspOf(b, id) { return (b.susp || {})[id] || 0; }
 
   function reactToChat(speaker, text) {
-    const lower = text.toLowerCase();
+    // iOS smart punctuation turns ' into ’ — normalize so "I’m the detective"
+    // matches the same as "I'm the detective".
+    const lower = text.toLowerCase().replace(/[’‘`´]/g, "'");
     const detClaim = /i'?m the detective|i am the detective|detective here|bet my badge/.test(lower);
     const defend = /innocent|not (the )?mafia|isn'?t (the )?mafia|it'?s not|it is not|definitely not|clean\b|trust (me|them)|leave .{1,20} alone|believe|save\b/.test(lower);
     const accuse = /mafia|suspicious|\bsus\b|guilty|lying|liar|lied|\blie\b|kill(er)?|vote (out|for|off)?|kick|eliminate|hang|lynch|it'?s |it is |i think|has to be|must be|money'?s on|watch|strange|acting|shady|off\b/.test(lower);
@@ -440,8 +442,12 @@ const Host = (() => {
       // Bot chatter counts for less than a human's word, so bots echoing each
       // other can't snowball one target — and every listening bot forms its
       // OWN opinion of what it just heard.
-      const amt = defend ? (detClaim ? -4 : speaker.isBot ? -1 : -2)
-                : accuse ? (detClaim ? 5 : speaker.isBot ? 1 : 2) : 0;
+      // Day 1 has no evidence — bot echo counts for little, so one random
+      // hunch can't snowball into a lynch mob on its own.
+      const botAccuse = G.dayNum <= 1 && Math.random() < 0.5 ? 0 : 1;
+      const amt = defend ? (detClaim ? (speaker.isBot ? -4 : -6) : speaker.isBot ? -1 : -2)
+                : accuse ? (detClaim ? 5 : speaker.isBot ? botAccuse : 2) : 0;
+      if (detClaim && defend) heatUp(t, -4); // a detective's vouch cools the room
       if (amt) {
         alivePlayers().filter(b => b.isBot && b.id !== speaker.id).forEach(b => bumpFor(b, t.id, amt));
         if (amt > 0) heatUp(t, amt);
@@ -464,6 +470,26 @@ const Host = (() => {
         handleChat(bot, botReplyTo(bot, lower));
       }, 1500 + Math.random() * 2500);
     });
+
+    // A detective vouching for someone pulls bot votes OFF the cleared player.
+    if (detClaim && defend && mentioned.length) {
+      const cleared = mentioned[0];
+      alivePlayers().filter(b => b.isBot && G.votes && G.votes[b.id] === cleared.id).forEach(b => {
+        if (Math.random() > 0.75) return;
+        setTimeout(() => {
+          if (!G || G.phase !== 'day' || !b.alive || !G.votes || G.votes[b.id] !== cleared.id) return;
+          const alt = botSuspicionPick(b, 3);
+          const next = alt && alt.id !== cleared.id ? alt.id : 'nobody';
+          b.chatIntent = { day: G.dayNum, target: next };
+          handleVote(b, next);
+          handleChat(b, rndOf([
+            `If the detective vouches for ${cleared.name}, I'm off them.`,
+            `Fine — ${cleared.name}'s cleared. But someone here is still lying.`,
+            `Alright, dropping ${cleared.name}. Watch the ones who piled on.`,
+          ]));
+        }, 1500 + Math.random() * 3000);
+      });
+    }
 
     if (!mentioned.length || defend || !accuse) { maybeReconsiderVotes(); return; }
 
@@ -1971,7 +1997,8 @@ const Host = (() => {
       return (town.length && Math.random() < 0.8) ? rndOf(town).id : 'nobody';
     }
     const opts = alivePlayers().filter(t => t.id !== p.id).map(t => t.id);
-    opts.push('nobody', 'nobody', 'nobody');
+    // Day 1 has nothing to go on — lean hard toward not lynching on a hunch.
+    for (let i = 0; i < (G.dayNum <= 1 ? 9 : 3); i++) opts.push('nobody');
     return opts.length ? rndOf(opts) : 'nobody';
   }
 
