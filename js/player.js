@@ -534,6 +534,17 @@ const Player = (() => {
 
   /* ---- Per-device record, kept in localStorage ---- */
 
+  let newUnlocks = []; // achievements earned this game, for the ended screen
+
+  function unlockAchievements(ids) {
+    try {
+      const store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}');
+      newUnlocks = ids.filter(id => ACHIEVEMENTS[id] && !store[id]);
+      newUnlocks.forEach(id => { store[id] = Date.now(); });
+      if (newUnlocks.length) localStorage.setItem('mafia-achievements', JSON.stringify(store));
+    } catch (e) { newUnlocks = []; }
+  }
+
   function recordStats() {
     const r = view.recap;
     if (!r || !r.gameId || !view.you.role || view.you.spectator) return;
@@ -545,13 +556,43 @@ const Player = (() => {
       const team = ROLES[view.you.role].team;
       if (r.youWon) {
         s.wins = (s.wins || 0) + 1;
+        s.winStreak = (s.winStreak || 0) + 1;
         if (team === 'mafia') s.mafiaWins = (s.mafiaWins || 0) + 1;
         else if (team === 'town') s.townWins = (s.townWins || 0) + 1;
         else s.soloWins = (s.soloWins || 0) + 1;
-      }
+      } else s.winStreak = 0;
+      s.n1Streak = r.youDiedNight1 ? (s.n1Streak || 0) + 1 : 0;
       if (view.you.alive) s.survived = (s.survived || 0) + 1;
       localStorage.setItem('mafia-stats', JSON.stringify(s));
+      // Cross-game achievements come from the device's own record;
+      // single-game ones arrive from the host with the recap.
+      const cross = [];
+      if ((s.wins || 0) >= 1) cross.push('first-blood');
+      if ((s.winStreak || 0) >= 3) cross.push('hat-trick');
+      if ((s.mafiaWins || 0) >= 5) cross.push('made-man');
+      if ((s.townWins || 0) >= 5) cross.push('pillar');
+      if ((s.n1Streak || 0) >= 3) cross.push('boots-on');
+      unlockAchievements([...(r.achievements || []), ...cross]);
     } catch (e) {}
+  }
+
+  /* Game-over achievements card: fresh unlocks up top, full catalogue folded. */
+  function achievementsCardHTML() {
+    let store = {};
+    try { store = JSON.parse(localStorage.getItem('mafia-achievements') || '{}'); } catch (e) {}
+    const total = Object.keys(ACHIEVEMENTS).length;
+    const got = Object.keys(store).filter(id => ACHIEVEMENTS[id]).length;
+    return `<div class="card">
+      <div class="section-title"><h3>🏆 Achievements</h3><span class="muted small-text">${got}/${total} unlocked</span></div>
+      ${newUnlocks.length
+        ? newUnlocks.map(id => `<p class="small-text ach-new">✨ <strong>${ACHIEVEMENTS[id].icon} ${esc(ACHIEVEMENTS[id].name)}</strong><br>
+            <span class="muted">${esc(ACHIEVEMENTS[id].desc)}</span></p>`).join('')
+        : '<p class="muted small-text">No new achievements this game.</p>'}
+      <details style="margin-top:8px"><summary class="small-text muted" style="cursor:pointer">All achievements</summary>${
+        Object.entries(ACHIEVEMENTS).map(([id, a]) =>
+          `<p class="small-text" style="margin:6px 0;${store[id] ? '' : 'opacity:0.4'}">${a.icon}
+            <strong>${esc(a.name)}</strong>${a.shame ? ' 🙈' : ''} — <span class="muted">${esc(a.desc)}</span></p>`).join('')
+      }</details></div>`;
   }
 
   function statsCardHTML() {
@@ -893,6 +934,7 @@ const Player = (() => {
         }
       }
       recordStats();
+      html += achievementsCardHTML();
       html += voteHistoryHTML();
       html += statsCardHTML();
       html += `<button id="btn-copy-result" class="btn" style="width:100%;margin-top:8px">📋 Copy result summary</button>`;

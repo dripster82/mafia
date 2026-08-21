@@ -83,6 +83,14 @@ const Host = (() => {
     G.log.push({ text, important: !!important });
   }
 
+  /* Single-game achievement award (each player collects ids; their own device
+   * decides what's newly unlocked). Arrays, not Sets, so snapshots survive. */
+  function award(p, id) {
+    if (!p || p.spectator) return;
+    p.ach = p.ach || [];
+    if (!p.ach.includes(id)) p.ach.push(id);
+  }
+
   /* Private dawn intelligence for one player. */
   function report(p, line) {
     send(p.id, { t: 'report', line: `Night ${G.dayNum}: ${line}` });
@@ -337,6 +345,10 @@ const Host = (() => {
       p.isBot ? { bot: true } : {},
       chan === 'main' ? {} : { chan }));
     if (G.chat.length > 250) G.chat = G.chat.slice(-250);
+    if (!p.isBot) {
+      p.chatCount = (p.chatCount || 0) + 1;
+      if (p.chatCount === 25) award(p, 'chatterbox');
+    }
     // Only public day talk sways the table (and holds the bots' votes open).
     if (G.phase === 'day' && chan === 'main') { G.lastChatAt = Date.now(); reactToChat(p, text); }
     broadcast();
@@ -822,6 +834,13 @@ const Host = (() => {
       p.ghostVoteUsed = false; p.defendedDay = 0; p.reconsideredDay = 0; p.chatIntent = null;
       p.susp = {}; p.heat = 0; p.credulity = 0.6 + Math.random() * 0.8; // gullible ↔ skeptical
       p.actions = []; p.intel = [];
+      // Achievement bookkeeping for this game.
+      p.ach = []; p.chatCount = 0; p.everVoted = false; p.everAttacked = false;
+      p.correctVoteDays = []; p.votedFamily = false; p.wasInvestigated = false;
+      p.guardQuietNights = 0; p.trackerColds = 0; p.coronerExams = 0;
+      p.ledgerReports = 0; p.consigCount = 0; p.poisonCount = 0;
+      p.vigMafiaKills = 0; p.detReads = {}; p.poisonedBy = null; p.forgedBy = null;
+      p.pledgedNight = null; p.diedNight = null; p.votedOutInnocent = false;
       // Every bot gets a temperament that shapes how it talks and votes.
       if (p.isBot) {
         p.persona = rndOf(['accuser', 'analyst', 'sheep', 'contrarian', 'showman']);
@@ -1023,9 +1042,16 @@ const Host = (() => {
 
     // 3. Framing (applies to tonight's investigations).
     const framed = new Set();
+    const framerOf = {}; // targetId -> framer (for achievements)
     alivePlayers().filter(p => p.role === 'framer').forEach(f => {
       const t = eff(f);
-      if (t && t !== 'skip') { framed.add(t); visits.push({ visitor: f.id, target: t }); }
+      if (t && t !== 'skip') {
+        framed.add(t);
+        framerOf[t] = f;
+        const tp = getPlayer(t);
+        if (tp) (tp.framedEverBy = tp.framedEverBy || []).push(f.id);
+        visits.push({ visitor: f.id, target: t });
+      }
     });
 
     // 4. Protection.
@@ -1065,6 +1091,7 @@ const Host = (() => {
           report(target, '🤝 The mafia made you an offer you couldn’t refuse. You are now on their side — you win with the mafia. Nobody else knows.');
           report(rc, `🤝 ${target.name} accepted the offer. They're one of ours now.`);
           recapResult(rc, `recruited ${target.name}`);
+          award(rc, 'welcome-family');
         }
       }
     });
@@ -1090,7 +1117,12 @@ const Host = (() => {
     let saved = false;
     const guardSaves = []; // guards who took the hit but were saved by the doctor
     const attack = (targetId, cause, guardable) => {
-      if (immune.has(targetId)) return;
+      const tp = getPlayer(targetId);
+      if (tp) tp.everAttacked = true;
+      if (immune.has(targetId)) {
+        if (tp && tp.role === 'drifter') award(tp, 'nine-lives');
+        return;
+      }
       if (targetId === savedId) { saved = true; return; }
       const guard = guardable ? guards[targetId] : null;
       if (guard && guard.alive) {
@@ -1102,6 +1134,18 @@ const Host = (() => {
     };
     if (killTarget) attack(killTarget, 'mafia', true);
     shots.forEach(s => attack(s.target, 'vigilante', false));
+    if (saved && savedId) {
+      alivePlayers().filter(d => d.role === 'doctor' && eff(d) === savedId)
+        .forEach(d => award(d, 'miracle-worker'));
+    }
+    // Bodyguards whose charge went unthreatened tonight.
+    Object.entries(guards).forEach(([chargeId, b]) => {
+      const intercepted = guardSaves.some(gs => gs.guard === b) || deaths.get(b.id) === 'guard';
+      if (!intercepted) {
+        b.guardQuietNights++;
+        if (b.guardQuietNights >= 3) award(b, 'quiet-shift');
+      }
+    });
 
     // 8. New poisons + pending poison deaths.
     alivePlayers().filter(p => p.role === 'poisoner').forEach(po => {
@@ -1110,6 +1154,9 @@ const Host = (() => {
         const target = getPlayer(t);
         if (target && target.alive) {
           target.poisonedNight = G.dayNum;
+          target.poisonedBy = po.id;
+          po.poisonCount++;
+          if (po.poisonCount >= 3) award(po, 'serial-doser');
           visits.push({ visitor: po.id, target: t });
           // The victim knows — nobody else is told until the body drops.
           report(target, '☠️ You feel deathly ill — you have been POISONED. Unless the doctor heals you tomorrow night, you will die at dawn.');
@@ -1123,6 +1170,10 @@ const Host = (() => {
           p.poisonedNight = null;
           curedName = p.name;
           report(p, '💊 You woke feeling terrible — the doctor pulled you back from the brink.');
+          alivePlayers().filter(d => d.role === 'doctor' && eff(d) === p.id).forEach(d => {
+            award(d, 'antidote');
+            if (d.id === p.id) award(d, 'heal-thyself');
+          });
         }
         else if (!immune.has(p.id)) deaths.set(p.id, 'poison');
       }
@@ -1142,7 +1193,27 @@ const Host = (() => {
       }
       victim.alive = false;
       victim.causeOfDeath = cause;
+      victim.diedNight = G.dayNum;
+      if (cause === 'guard') award(victim, 'human-shield');
+      if (cause === 'poison' && victim.poisonedBy) {
+        const po = getPlayer(victim.poisonedBy);
+        if (po) award(po, 'slow-burn');
+      }
+      if (victim.pledged && victim.pledgedNight === G.dayNum - 1) award(victim, 'sitting-duck');
       killed.push({ id, name: victim.name, role: victim.role, cause });
+    });
+    // Vigilante marksmanship, judged on the bodies.
+    shots.forEach(s => {
+      const victim = getPlayer(s.target);
+      if (victim && !victim.alive && victim.causeOfDeath === 'vigilante') {
+        if (teamOf(victim) === 'mafia') {
+          award(s.shooter, 'sharpshooter');
+          s.shooter.vigMafiaKills++;
+          if (s.shooter.vigMafiaKills >= 2) award(s.shooter, 'double-tap');
+        } else if (ROLES[victim.role] && ROLES[victim.role].team === 'town') {
+          award(s.shooter, 'friendly-fire');
+        }
+      }
     });
     // Survivors of an attack are likely to be attacked again — protective
     // bots (doctor, bodyguard) prioritize them next night.
@@ -1157,6 +1228,8 @@ const Host = (() => {
           getPlayer(k.id).cleaned = true;
           report(c, `🧹 You cleaned the scene. ${k.name} was the ${ROLES[k.role].name} — only you know.`);
           recapResult(c, `cleaned ${k.name}'s body`);
+          award(c, 'spotless');
+          if (c.cleanerUses === 0) award(c, 'deep-clean');
           k.role = null; // public announcement shows no role
         }
       }
@@ -1170,6 +1243,7 @@ const Host = (() => {
         if (target && !target.forged) {
           f.forgerUses--;
           target.forged = true;
+          target.forgedBy = f.id;
           report(f, `✒️ Prepared a forgery for ${target.name}'s last words.`);
         }
       }
@@ -1191,6 +1265,8 @@ const Host = (() => {
           revivedName = body.name;
           report(body, '⚰️ You gasp awake — the Mortician has raised you from the dead!');
           recapResult(m, `raised ${body.name} from the dead`);
+          award(m, 'necromancer');
+          if (['doctor', 'detective', 'bodyguard', 'vigilante'].includes(body.role)) award(m, 'grave-concerns');
         } else {
           // Never silent: a raise that can't complete tells the mortician so.
           recapResult(m, 'the ritual failed');
@@ -1203,6 +1279,7 @@ const Host = (() => {
     G.players.filter(x => x.role === 'executioner' && !x.achievedWin && !x.lostWin).forEach(ex => {
       if (ex.execTargetId && killed.some(k => k.id === ex.execTargetId)) {
         ex.lostWin = true;
+        award(ex, 'plans-ruined');
         report(ex, '🪓 Your target is dead — but not by the town’s hand. Your grudge dies unsettled.');
       }
     });
@@ -1225,6 +1302,14 @@ const Host = (() => {
         const target = getPlayer(t);
         if (target) {
           const reads = target.role === 'don' ? false : (framed.has(t) || teamOf(target) === 'mafia');
+          d.detReads[t] = reads;
+          if (target.role === 'don') target.wasInvestigated = true;
+          if (framed.has(t) && teamOf(target) !== 'mafia') {
+            award(d, 'framed');
+            if (framerOf[t]) award(framerOf[t], 'stitch-up');
+          }
+          const others = alivePlayers().filter(x => x.id !== d.id);
+          if (others.length && others.every(o => o.id in d.detReads)) award(d, 'case-closed');
           if (d.isBot) {
             (d.intel = d.intel || []).push({ targetId: t, isMafia: reads });
             // Hard evidence overrides gossip in the detective's own book.
@@ -1243,6 +1328,9 @@ const Host = (() => {
         if (target && target.role) {
           report(c, `🧠 ${target.name} is the ${ROLES[target.role].icon} ${ROLES[target.role].name}.`);
           recapResult(c, ROLES[target.role].name);
+          c.consigCount++;
+          if (target.role !== 'villager') award(c, 'know-your-enemy');
+          if (c.consigCount >= 3) award(c, 'full-dossier');
         }
       }
     });
@@ -1254,6 +1342,8 @@ const Host = (() => {
           ? `🪟 Visitors at ${nameOf(t)}'s door: ${[...new Set(callers)].join(', ')}.`
           : `🪟 No one came to ${nameOf(t)}'s door.`);
         recapResult(w, callers.length ? [...new Set(callers)].join(', ') : 'no visitors');
+        if (callers.length) award(w, 'neighbourhood-watch');
+        if (killTarget && t === killTarget) award(w, 'eyes-everywhere');
       }
     });
     alivePlayers().filter(p => p.role === 'tracker').forEach(tr => {
@@ -1264,6 +1354,8 @@ const Host = (() => {
           ? `👣 ${nameOf(t)} went to visit ${nameOf(went.target)}.`
           : `👣 ${nameOf(t)} stayed home all night.`);
         recapResult(tr, went ? `visited ${nameOf(went.target)}` : 'stayed home');
+        if (went && killTarget && went.target === killTarget) award(tr, 'hot-pursuit');
+        if (!went) { tr.trackerColds++; if (tr.trackerColds >= 3) award(tr, 'cold-trail'); }
       }
     });
     alivePlayers().filter(p => p.role === 'coroner').forEach(co => {
@@ -1273,6 +1365,9 @@ const Host = (() => {
         if (body && !body.alive && body.role) {
           report(co, `🔬 The body of ${body.name}: they were the ${ROLES[body.role].icon} ${ROLES[body.role].name}.`);
           recapResult(co, ROLES[body.role].name);
+          award(co, 'cause-of-death');
+          co.coronerExams++;
+          if (co.coronerExams >= 3) award(co, 'full-morgue');
         }
       }
     });
@@ -1282,6 +1377,7 @@ const Host = (() => {
     alivePlayers().filter(p => p.role === 'mayor' && !p.pledged).forEach(m => {
       if (eff(m) === 'pledge') {
         m.pledged = true;
+        m.pledgedNight = G.dayNum;
         mayorName = m.name;
         addLog(`${m.name} went public: they are the Mayor! Their vote now counts double.`, true);
       }
@@ -1307,6 +1403,8 @@ const Host = (() => {
     // Bookkeeper tally (after everything settles).
     alivePlayers().filter(p => p.role === 'bookkeeper').forEach(b => {
       report(b, `📒 The ledger says: ${aliveMafia().length} of the mafia still breathing.`);
+      b.ledgerReports++;
+      if (b.ledgerReports >= 4) award(b, 'long-audit');
     });
 
     // Day 1 gives the table almost nothing to go on — a rumour seeds the talk.
@@ -1464,6 +1562,58 @@ const Host = (() => {
       addLog('The town chose to eliminate no one.');
     }
 
+    // ---- achievement bookkeeping for this vote ----
+    Object.entries(G.votes).forEach(([voterId, t]) => {
+      const voter = getPlayer(voterId);
+      const target = t !== 'nobody' ? getPlayer(t) : null;
+      if (!voter || !target) return;
+      target.everVoted = true;
+      if (teamOf(target) === 'mafia') {
+        if (voter.role === 'villager' && !voter.correctVoteDays.includes(G.dayNum)) {
+          voter.correctVoteDays.push(G.dayNum);
+          if (voter.correctVoteDays.length >= 3) award(voter, 'voice-of-people');
+        }
+        if (teamOf(voter) === 'mafia' && voter.id !== target.id) voter.votedFamily = true;
+      }
+    });
+    if (eliminated) {
+      eliminated.diedNight = G.dayNum;
+      if (G.dayNum === 1) award(eliminated, 'tough-crowd');
+      const elimInnocent = teamOf(eliminated) !== 'mafia';
+      if (elimInnocent && ROLES[eliminated.role].team === 'town') eliminated.votedOutInnocent = true;
+      if (elimInnocent) {
+        if (ROLES[eliminated.role].team === 'town') G.mislynch = true;
+        (eliminated.framedEverBy || []).forEach(fid => {
+          const fr = getPlayer(fid);
+          if (fr) award(fr, 'miscarriage');
+        });
+        // Voters who pointed at the real mafia while the town got it wrong.
+        Object.entries(G.votes).forEach(([voterId, t]) => {
+          const voter = getPlayer(voterId);
+          const target = t !== 'nobody' ? getPlayer(t) : null;
+          if (voter && target && teamOf(target) === 'mafia') award(voter, 'against-grain');
+        });
+      } else {
+        // A mafia member falls: credit the sleuths and the ghosts.
+        G.players.filter(d => d.role === 'detective' && d.detReads && d.detReads[eliminated.id] === true)
+          .forEach(d => award(d, 'gumshoe'));
+        ghostVoters.filter(v => G.votes[v.id] === eliminated.id).forEach(v => award(v, 'vengeful-spirit'));
+      }
+      // Kingmaker / bandwagon driver from vote insertion order.
+      const majority = Math.floor(castWeight / 2) + 1;
+      let running = 0;
+      let first = true;
+      Object.entries(G.votes).forEach(([voterId, t]) => {
+        if (t !== eliminated.id) return;
+        const voter = getPlayer(voterId);
+        if (!voter) return;
+        if (first) { award(voter, 'bandwagon-driver'); first = false; }
+        const before = running;
+        running += voteWeight(voter);
+        if (before < majority && running >= majority) award(voter, 'kingmaker');
+      });
+    }
+
     // The elimination reveals a role — the town re-reads the record.
     if (eliminated) reassessOnDeath(eliminated);
 
@@ -1472,6 +1622,7 @@ const Host = (() => {
       G.players.filter(x => x.role === 'executioner' && !x.achievedWin && !x.lostWin).forEach(ex => {
         if (ex.execTargetId === eliminated.id) {
           ex.achievedWin = true;
+          award(ex, 'grudge-settled');
           send(ex.id, { t: 'report', line: '🪓 Your grudge is settled — your target was voted out. You win when this game ends.' });
         }
       });
@@ -1550,6 +1701,7 @@ const Host = (() => {
       G.winner = 'jester';
       setPhaseTimer(0);
       addLog(`${G.announce.eliminatedName} was the Jester — the Jester wins alone! 🃏`, true);
+      finalizeAchievements();
       broadcast();
       return;
     }
@@ -1576,12 +1728,55 @@ const Host = (() => {
     if (p.forged) {
       G.lastWords = '🔥 …the paper burns before anyone can read it. The last words are destroyed.';
       addLog(`${p.name}'s last words were mysteriously destroyed.`);
+      const f = p.forgedBy ? getPlayer(p.forgedBy) : null;
+      if (f) award(f, 'ink-blot');
     } else {
       G.lastWords = text;
+      if (!p.isBot) award(p, 'famous-last-words');
       addLog(`${p.name}'s last words: “${text}”`);
     }
     scheduleVerdictEnd(6000);
     broadcast();
+  }
+
+  /* End-of-game achievements that need the winner known. */
+  function finalizeAchievements() {
+    const extras = extraWinners();
+    const roster = G.players.filter(p => !p.spectator && p.role);
+    roster.forEach(p => {
+      const team = teamOf(p);
+      const won = extras.some(w => w.name === p.name) ||
+        (G.winner === 'mafia' && team === 'mafia') ||
+        (G.winner === 'town' && team === 'town') ||
+        (G.winner === 'jester' && p.role === 'jester');
+      if (roster.length >= 10) award(p, 'full-house');
+      if (p.role === 'mortician' && !p.alive && !p.usedRaise) award(p, 'too-late');
+      if (p.role === 'forger' && p.forgerUses === 2) award(p, 'wasted-ink');
+      if (p.role === 'drifter' && p.drifterUses === 0) award(p, 'ghost-town');
+      if (p.role === 'jester' && p.alive && G.winner !== 'jester') award(p, 'tragic-comedy');
+      if (p.role === 'villager' && p.alive && !p.everAttacked && !p.everVoted) award(p, 'unremarkable');
+      if (!won) return;
+      if (ROLES[p.role].team === 'jester') award(p, 'lone-wolf');
+      if (p.alive && !roster.some(x => x !== p && x.alive && teamOf(x) === team)) award(p, 'sole-survivor');
+      if (team === 'town' && G.winner === 'town' && !G.mislynch) award(p, 'perfect-town');
+      if (team === 'mafia' && G.winner === 'mafia' &&
+          roster.filter(x => teamOf(x) === 'mafia').every(x => x.alive)) award(p, 'clean-sweep');
+      if (p.votedOutInnocent) award(p, 'martyr');
+      if (team === 'town' && ROLES[p.role].team === 'town' && p.role !== 'villager' && !p.everVoted) award(p, 'silent-service');
+      if (p.role === 'villager') award(p, 'just-a-farmer');
+      if (p.role === 'don') {
+        if (p.wasInvestigated) award(p, 'don-abides');
+        if (roster.filter(x => x.alive && teamOf(x) === 'mafia').length >= 2) award(p, 'head-family');
+      }
+      if ((p.role === 'mafia' || p.role === 'don') && !p.everVoted) award(p, 'cold-blooded');
+      if (team === 'mafia' && p.votedFamily) award(p, 'bold-faced');
+      if (p.role === 'bookkeeper' && p.alive && G.winner === 'town') award(p, 'balanced-ledger');
+      if (p.role === 'mayor' && p.pledged && p.alive) award(p, 'landslide');
+      if (p.role === 'mayor' && !p.pledged) award(p, 'silent-majority');
+      if (p.role === 'jester' && G.winner === 'jester') award(p, 'curtain-call');
+      if (p.role === 'recruiter' && p.recruiterUsed &&
+          roster.some(x => x.recruited && x.alive)) award(p, 'puppet-master');
+    });
   }
 
   function checkWin() {
@@ -1598,6 +1793,7 @@ const Host = (() => {
         ? 'All mafia have been eliminated — the town wins! 🎉'
         : 'The mafia have taken over the town — the mafia win! 🔪', true);
       extraWinners().forEach(w => addLog(`${w.name} also wins: ${w.why}`, true));
+      finalizeAchievements();
       broadcast();
       return true;
     }
@@ -2292,6 +2488,8 @@ const Host = (() => {
           actions: (x.actions || []).slice(),
         })),
         gameId: G.gameId || null,
+        achievements: (p.ach || []).slice(),
+        youDiedNight1: !p.alive && p.diedNight === 1 && p.causeOfDeath !== 'vote',
         youWon: !p.spectator && !!p.role && (
           extras.some(w => w.name === p.name) ||
           (G.winner === 'mafia' && team === 'mafia') ||
