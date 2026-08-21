@@ -38,6 +38,22 @@ body {
 .content { flex: 1; display: flex; flex-direction: column; gap: 14px; padding-bottom: 32px; }
 
 .logo { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px; }
+.home-logo {
+  font-size: 2.5rem;
+  text-shadow: 0 0 28px rgba(224, 67, 63, 0.35), 0 2px 0 rgba(0, 0, 0, 0.4);
+}
+.home-card {
+  border-color: rgba(224, 67, 63, 0.25);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  animation: home-rise 0.5s ease both;
+}
+@keyframes home-rise { from { opacity: 0; transform: translateY(12px); } }
+@media (prefers-reduced-motion: reduce) { .home-card { animation: none; } }
+.chip-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 0 0 20px; }
+.chip {
+  font-size: 0.75rem; color: var(--muted); background: var(--bg2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; white-space: nowrap;
+}
 .logo.small { font-size: 1.05rem; font-weight: 700; }
 .tagline { color: var(--muted); margin: 10px 0 26px; line-height: 1.5; }
 
@@ -80,7 +96,11 @@ input[type="text"]:focus { border-color: var(--accent); }
 }
 .btn:active { transform: scale(0.98); }
 .btn:hover { filter: brightness(1.12); }
-.btn.primary { background: var(--accent); border-color: var(--accent2); }
+.btn.primary {
+  background: linear-gradient(165deg, var(--accent) 0%, var(--accent2) 100%);
+  border-color: var(--accent2);
+  box-shadow: 0 6px 18px rgba(224, 67, 63, 0.28);
+}
 .btn.big { padding: 15px 18px; font-size: 1.1rem; }
 .btn.small { padding: 7px 12px; font-size: 0.85rem; }
 .btn.link { background: none; border: none; color: var(--muted); font-weight: 500; }
@@ -174,6 +194,7 @@ input[type="text"]:focus { border-color: var(--accent); }
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 .trophy-fab { right: auto; left: 14px; }
+.profile-fab { right: auto; left: 14px; bottom: 68px; }
 .guide-overlay {
   position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, 0.65);
   display: flex; align-items: center; justify-content: center; padding: 16px;

@@ -16,11 +16,18 @@
 
   <!-- ============ HOME ============ -->
   <section id="screen-home" class="screen active">
-    <div class="card center">
-      <h1 class="logo">🕵️ Mafia Night</h1>
+    <div class="card center home-card">
+      <h1 class="logo home-logo">🕵️ Mafia Night</h1>
       <p class="tagline" data-i18n="home.tagline">A browser-based operator for the classic party game.<br>One device hosts, everyone else joins.</p>
+      <div class="chip-row">
+        <span class="chip">🤖 Solo with bots</span>
+        <span class="chip">🌐 Public games</span>
+        <span class="chip">🎭 22 roles</span>
+        <span class="chip">🏆 72 achievements</span>
+      </div>
       <button id="btn-go-host" class="btn primary big" data-i18n="home.host">Host a game</button>
       <button id="btn-go-join" class="btn big" data-i18n="home.join">Join a game</button>
+      <button id="btn-profile-home" class="btn link">👤 Your profile &amp; history</button>
       <p class="hint" data-i18n="home.hint">No accounts, no servers — devices connect directly to the host. Keep the host device awake for the whole game.</p>
       <p id="app-version" class="hint" style="opacity:0.6">Version __BUILD__</p>
     </div>

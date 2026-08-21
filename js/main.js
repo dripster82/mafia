@@ -83,6 +83,53 @@ const App = (() => {
     }, 15000);
   }
 
+  /* ---- 👤 Profile & history overlay (works on any screen) ---- */
+
+  function closeProfile() {
+    const old = document.getElementById('profile-overlay');
+    if (old) old.remove();
+  }
+
+  function showProfile() {
+    closeProfile();
+    let name = '', avatar = '', stats = {}, hist = [], achCount = 0;
+    try {
+      name = localStorage.getItem('mafia-name') || 'Anonymous';
+      avatar = localStorage.getItem('mafia-avatar') || '🕵️';
+      stats = JSON.parse(localStorage.getItem('mafia-stats') || '{}');
+      hist = JSON.parse(localStorage.getItem('mafia-history') || '[]');
+      achCount = Object.keys(JSON.parse(localStorage.getItem('mafia-achievements') || '{}'))
+        .filter(id => typeof ACHIEVEMENTS !== 'undefined' && ACHIEVEMENTS[id]).length;
+    } catch (e) {}
+    const achTotal = typeof ACHIEVEMENTS !== 'undefined' ? Object.keys(ACHIEVEMENTS).length : 0;
+    const statLine = stats.games
+      ? `${stats.games} game${stats.games > 1 ? 's' : ''} · ${stats.wins || 0} won` +
+        `${stats.townWins ? ` · 🏘 ${stats.townWins}` : ''}${stats.mafiaWins ? ` · 🔪 ${stats.mafiaWins}` : ''}` +
+        `${stats.soloWins ? ` · 🎭 ${stats.soloWins}` : ''}${stats.survived ? ` · 🌅 ${stats.survived} survived` : ''}`
+      : 'No games recorded on this device yet.';
+    const histRows = hist.slice(0, 20).map(h => {
+      const d = new Date(h.ts);
+      const when = `${d.getDate()}/${d.getMonth() + 1} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      const role = typeof ROLES !== 'undefined' && ROLES[h.role] ? `${ROLES[h.role].icon} ${ROLES[h.role].name}` : '?';
+      return `<p class="small-text" style="margin:6px 0"><span class="muted">${when}</span> · ${role} ·
+        ${h.won ? '<strong>won</strong> 🏆' : 'lost'}${h.survived ? ' · survived' : ''} <span class="muted">· ${h.players} players</span></p>`;
+    }).join('');
+    const div = document.createElement('div');
+    div.className = 'guide-overlay';
+    div.id = 'profile-overlay';
+    div.innerHTML = `<div class="guide-panel card">
+      <div class="section-title"><h3>👤 ${avatar} ${escText(name)}</h3>
+        <button id="btn-profile-close" class="btn small">✕ Close</button></div>
+      <p class="small-text" style="margin:4px 0">📈 ${statLine}</p>
+      <p class="small-text muted" style="margin:2px 0 10px">🏆 ${achCount}/${achTotal} achievements unlocked</p>
+      <p class="small-text muted" style="margin:10px 0 2px"><strong>Past games on this device</strong></p>
+      ${histRows || '<p class="muted small-text">Nothing yet — go play!</p>'}
+    </div>`;
+    div.onclick = e => { if (e.target === div) closeProfile(); };
+    document.body.appendChild(div);
+    document.getElementById('btn-profile-close').onclick = closeProfile;
+  }
+
   function showScreen(name) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     el('screen-' + name).classList.add('active');
@@ -104,16 +151,7 @@ const App = (() => {
     // Apply any non-English strings to the shell screens (see js/i18n.js).
     if (typeof I18N !== 'undefined' && I18N.lang !== 'en') I18N.apply();
 
-    // A one-line record for returning players (kept per device).
-    try {
-      const s = JSON.parse(localStorage.getItem('mafia-stats') || 'null');
-      if (s && s.games) {
-        const p = document.createElement('p');
-        p.className = 'hint';
-        p.textContent = `📈 Your record: ${s.games} game${s.games > 1 ? 's' : ''}, ${s.wins || 0} won`;
-        el('app-version').before(p);
-      }
-    } catch (e) {}
+    el('btn-profile-home').onclick = showProfile;
 
     // A host that reloaded mid-game can pick the same room back up.
     const snap = typeof Host !== 'undefined' && Host.snapshotInfo && Host.snapshotInfo();
@@ -239,5 +277,5 @@ const App = (() => {
   // under a new ?join= URL. Force a clean boot on restore.
   window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
 
-  return { showScreen, showJoinError, joinLinkFor, qrSvgFor };
+  return { showScreen, showJoinError, joinLinkFor, qrSvgFor, showProfile };
 })();

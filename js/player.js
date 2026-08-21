@@ -684,7 +684,8 @@ const Player = (() => {
   let trophyOpen = false;
   let trophyViewId = null;
   function trophyHTML() {
-    const fab = `<button id="btn-trophies" class="guide-fab trophy-fab" title="Achievements">🏆</button>`;
+    const fab = `<button id="btn-profile-fab" class="guide-fab profile-fab" title="Profile & history">👤</button>
+      <button id="btn-trophies" class="guide-fab trophy-fab" title="Achievements">🏆</button>`;
     if (!trophyOpen) return fab;
     let title = '🏆 Your achievements';
     let ids = null; // null = read your own from this device
@@ -1142,6 +1143,8 @@ const Player = (() => {
 
     const tb = el('btn-trophies');
     if (tb) tb.onclick = () => { trophyOpen = true; trophyViewId = null; render(); };
+    const pf = el('btn-profile-fab');
+    if (pf) pf.onclick = () => App.showProfile();
     const tc = el('btn-trophies-close');
     if (tc) tc.onclick = () => { trophyOpen = false; trophyViewId = null; render(); };
     const to = c.querySelector('.trophy-overlay');
