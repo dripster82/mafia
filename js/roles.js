@@ -138,8 +138,8 @@ const OPTIONAL_ROLES = [
  * Wi-Fi with client isolation, blocked UDP, cellular CGNAT), so a TURN
  * relay (Metered) provides the fallback path — the turns:443 TCP endpoint
  * gets through networks that only allow HTTPS-style traffic. */
-const TURN_USER = 'a44214e32acbc0ccccebf87d';
-const TURN_PASS = 'qT0S5RzWuh9VSFYe';
+const TURN_USER = '37e32d862a1dc3ede79358ec';
+const TURN_PASS = 'PyJPJOxyPVz+Ht+O';
 const PEER_OPTS = {
   debug: 1,
   config: {
