@@ -1477,12 +1477,12 @@ const Host = (() => {
       if (b.ledgerReports >= 4) award(b, 'long-audit');
     });
 
-    // Day 1 gives the table almost nothing to go on — a rumour seeds the talk.
-    // It's real intel, fuzzed: 70% of the time it names someone who genuinely
-    // left their house tonight (mafia, doctor, any visitor — the rumour can't
-    // tell them apart), 30% a red herring who stayed home.
+    // Every other day a rumour seeds the talk. It's real intel, fuzzed: 70%
+    // of the time it names someone who genuinely left their house tonight
+    // (mafia, doctor, any visitor — the rumour can't tell them apart), 30% a
+    // red herring who stayed home.
     let rumour = null;
-    if (G.dayNum === 1 && alivePlayers().length) {
+    if (G.dayNum % 2 === 1 && alivePlayers().length) {
       const outIds = [...new Set(visits.map(x => x.visitor))]
         .filter(id => { const pl = getPlayer(id); return pl && pl.alive; });
       const homeIds = alivePlayers().filter(pl => !outIds.includes(pl.id)).map(pl => pl.id);
@@ -1501,6 +1501,19 @@ const Host = (() => {
         // The table hears it too — a soft nudge, scaled by each bot's credulity.
         alivePlayers().filter(b => b.isBot && b.id !== t.id).forEach(b => bumpFor(b, t.id, 1));
         heatUp(t, 1);
+        // …and someone usually brings it up out loud.
+        const commenter = rndOf(alivePlayers().filter(b => b.isBot && b.id !== t.id));
+        if (commenter && Math.random() < 0.6) {
+          setTimeout(() => {
+            if (!G || G.phase !== 'day' || !commenter.alive || !t.alive) return;
+            handleChat(commenter, rndOf([
+              `So nobody's going to ask why ${t.name} was out after midnight?`,
+              `That rumour about ${t.name}… where there's smoke.`,
+              `${t.name}, care to explain last night, then?`,
+              `I heard the same about ${t.name}, for what it's worth.`,
+            ]));
+          }, 4000 + Math.random() * 4000);
+        }
       }
     }
 
