@@ -129,6 +129,12 @@ const App = (() => {
       };
     }
 
+    // Remember the player's name between games.
+    let savedName = '';
+    try { savedName = localStorage.getItem('mafia-name') || ''; } catch (e) {}
+    if (savedName) { el('host-name').value = savedName; el('join-name').value = savedName; }
+    const rememberName = n => { try { localStorage.setItem('mafia-name', n); } catch (e) {} };
+
     el('btn-go-host').onclick = () => {
       el('host-error').classList.add('hidden');
       showScreen('host-setup');
@@ -142,6 +148,7 @@ const App = (() => {
         el('host-error').classList.remove('hidden');
         return;
       }
+      rememberName(name);
       showScreen('host');
       Host.create(name);
     }
@@ -182,6 +189,7 @@ const App = (() => {
       if (code.length !== 5) { err.textContent = 'Room codes are 5 letters.'; err.classList.remove('hidden'); return; }
       if (!name) { err.textContent = 'Please enter your name.'; err.classList.remove('hidden'); return; }
       err.classList.add('hidden');
+      rememberName(name);
       showScreen('player');
       el('player-room-pill').textContent = 'Room: ' + code;
       Player.join(code, name);

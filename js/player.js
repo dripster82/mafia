@@ -1035,6 +1035,8 @@ const Player = (() => {
       const pn = el('profile-name');
       if (!pn) return;
       sendAction({ t: 'profile', name: pn.value });
+      // Remember the new name for future games too.
+      try { if (pn.value.trim()) localStorage.setItem('mafia-name', pn.value.trim()); } catch (e) {}
       // Instant feedback — the confirming broadcast re-render keeps it via the flag.
       profileSavedFlash = Date.now();
       const b = el('profile-save');
