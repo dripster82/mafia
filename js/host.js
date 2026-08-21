@@ -357,7 +357,31 @@ const Host = (() => {
     }
     // Only public day talk sways the table (and holds the bots' votes open).
     if (G.phase === 'day' && chan === 'main') { G.lastChatAt = Date.now(); reactToChat(p, text); }
+    if (chan === 'mafia') reactToFamilyChat(p, text);
     broadcast();
+  }
+
+  /* The family listens to its own channel: naming a villager at night sets
+   * tonight's plan — bot killers fall in line behind it (human or bot voice
+   * alike), and a mate acknowledges the call. */
+  function reactToFamilyChat(speaker, text) {
+    if (G.phase !== 'night') return;
+    const lower = text.toLowerCase();
+    const target = alivePlayers().find(t =>
+      teamOf(t) !== 'mafia' && lower.includes(t.name.toLowerCase()));
+    if (!target) return;
+    G.familyPlan = { night: G.dayNum, targetId: target.id };
+    const mates = aliveMafia().filter(b => b.isBot && b.id !== speaker.id);
+    if (mates.length && Math.random() < 0.6) {
+      const b = rndOf(mates);
+      setTimeout(() => {
+        if (!G || G.phase !== 'night' || !b.alive) return;
+        handleChat(b, rndOf([
+          'Agreed.', `${target.name} it is.`, 'Say no more.',
+          `Consider it handled.`, `Clean and quiet. ${target.name} sleeps.`,
+        ]), 'mafia');
+      }, 1200 + Math.random() * 2000);
+    }
   }
 
   /* Everyone at the table — bots included — listens to what gets said.
@@ -852,6 +876,7 @@ const Host = (() => {
       p.ledgerReports = 0; p.consigCount = 0; p.poisonCount = 0;
       p.vigMafiaKills = 0; p.detReads = {}; p.poisonedBy = null; p.forgedBy = null;
       p.pledgedNight = null; p.diedNight = null; p.votedOutInnocent = false;
+      p.familyShare = null;
       // Every bot gets a temperament that shapes how it talks and votes.
       if (p.isBot) {
         p.persona = rndOf(['accuser', 'analyst', 'sheep', 'contrarian', 'showman']);
@@ -1041,7 +1066,11 @@ const Host = (() => {
     const blocked = new Set();
     alivePlayers().filter(p => p.role === 'fixer').forEach(f => {
       const t = A[f.id];
-      if (t && t !== 'skip') { blocked.add(t); visits.push({ visitor: f.id, target: t }); }
+      if (t && t !== 'skip') {
+        blocked.add(t);
+        visits.push({ visitor: f.id, target: t });
+        if (f.isBot) f.familyShare = `I jammed ${nameOf(t)}'s night work.`;
+      }
     });
     const eff = p => blocked.has(p.id) ? undefined : A[p.id];
 
@@ -1059,6 +1088,7 @@ const Host = (() => {
       if (t && t !== 'skip') {
         framed.add(t);
         framerOf[t] = f;
+        if (f.isBot) f.familyShare = `Evidence planted on ${nameOf(t)} — if the detective looks tonight, they burn.`;
         const tp = getPlayer(t);
         if (tp) (tp.framedEverBy = tp.framedEverBy || []).push(f.id);
         visits.push({ visitor: f.id, target: t });
@@ -1168,6 +1198,7 @@ const Host = (() => {
           target.poisonedBy = po.id;
           po.poisonCount++;
           if (po.poisonCount >= 3) award(po, 'serial-doser');
+          if (po.isBot) po.familyShare = `${target.name} is dosed — they drop at dawn tomorrow unless the doctor catches it.`;
           visits.push({ visitor: po.id, target: t });
           // The victim knows — nobody else is told until the body drops.
           report(target, '☠️ You feel deathly ill — you have been POISONED. Unless the doctor heals you tomorrow night, you will die at dawn.');
@@ -1340,6 +1371,8 @@ const Host = (() => {
           report(c, `🧠 ${target.name} is the ${ROLES[target.role].icon} ${ROLES[target.role].name}.`);
           recapResult(c, ROLES[target.role].name);
           c.consigCount++;
+          if (c.isBot) c.familyShare = `${target.name} is the ${ROLES[target.role].name}.${
+            ['doctor', 'detective', 'bodyguard', 'vigilante'].includes(target.role) ? ' Priority target.' : ''}`;
           if (target.role !== 'villager') award(c, 'know-your-enemy');
           if (c.consigCount >= 3) award(c, 'full-dossier');
         }
@@ -2061,6 +2094,9 @@ const Host = (() => {
     const role = p.role;
 
     if (role === 'mafia' || role === 'don') {
+      // A target named on the family channel tonight takes priority.
+      if (G.familyPlan && G.familyPlan.night === G.dayNum &&
+          inT(G.familyPlan.targetId) && Math.random() < 0.8) return G.familyPlan.targetId;
       if (claimant && Math.random() < 0.75) return claimant.id; // silence the "detective"
       const trusted = mostTrusted();
       if (trusted && Math.random() < 0.5) return trusted;       // credible townsfolk are dangerous
@@ -2186,14 +2222,18 @@ const Host = (() => {
       if (!ui) return;
       const choice = botNightChoice(p, ui);
       if (choice) {
-        // Mafia bots call their shot on the family channel.
+        // Mafia bots call their shot on the family channel (which also sets
+        // tonight's plan for the rest of the family to fall in behind).
         if ((p.role === 'mafia' || p.role === 'don') && choice !== 'skip' && Math.random() < 0.5) {
           const t = getPlayer(choice);
-          if (t) handleChat(p, rndOf([
-            `Tonight it's ${t.name}. Agreed?`,
-            `I say we pay ${t.name} a visit.`,
-            `${t.name} has been too sharp. They sleep tonight.`,
-          ]), 'mafia');
+          if (t) {
+            G.familyPlan = { night: G.dayNum, targetId: t.id };
+            handleChat(p, rndOf([
+              `Tonight it's ${t.name}. Agreed?`,
+              `I say we pay ${t.name} a visit.`,
+              `${t.name} has been too sharp. They sleep tonight.`,
+            ]), 'mafia');
+          }
         }
         handleNightAction(p, choice);
       }
@@ -2209,13 +2249,22 @@ const Host = (() => {
           ]));
         }
         handleChat(p, botLine(p));
-        // …and mutter strategy where only the family can hear.
-        if (p.role && teamOf(p) === 'mafia' && Math.random() < 0.4) {
-          const ci = p.chatIntent;
-          const t = ci && ci.target && ci.target !== 'nobody' ? getPlayer(ci.target) : null;
-          handleChat(p, t && t.alive
-            ? rndOf([`I'll keep the table pointed at ${t.name}.`, `Pile on ${t.name} if it comes to a vote.`, `${t.name} takes the fall today.`])
-            : rndOf(['Heads down today — vote with the crowd.', 'Don’t defend me too hard, it looks worse.', 'Let the villagers eat each other.']), 'mafia');
+        // …and talk business where only the family can hear: real intel from
+        // last night first, day strategy otherwise.
+        if (p.role && teamOf(p) === 'mafia') {
+          if (p.familyShare && Math.random() < 0.85) {
+            handleChat(p, p.familyShare, 'mafia');
+            p.familyShare = null;
+          } else if (Math.random() < 0.4) {
+            const ci = p.chatIntent;
+            const t = ci && ci.target && ci.target !== 'nobody' ? getPlayer(ci.target) : null;
+            const claim = [...(G.detClaimants || [])].map(getPlayer).find(x => x && x.alive && teamOf(x) !== 'mafia');
+            handleChat(p, claim && Math.random() < 0.4
+              ? rndOf([`${claim.name} is playing detective. They can't see another sunrise.`, `Whoever deals with ${claim.name} tonight buys the drinks.`])
+              : t && t.alive
+                ? rndOf([`I'll keep the table pointed at ${t.name}.`, `Pile on ${t.name} if it comes to a vote.`, `${t.name} takes the fall today.`])
+                : rndOf(['Heads down today — vote with the crowd.', 'Don’t defend me too hard, it looks worse.', 'Let the villagers eat each other.']), 'mafia');
+          }
         }
         return;
       }
