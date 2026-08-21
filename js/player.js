@@ -232,6 +232,9 @@ const Player = (() => {
 
   function fatal(msg) {
     if (local) return; // loopback errors can't occur; never bounce the host out
+    // A fatal rejection (kicked, name taken) voids the resume ticket — the
+    // next load must not auto-dial the room that turned us away.
+    try { sessionStorage.removeItem('mafia-session'); } catch (e) {}
     cleanup(true);
     App.showJoinError(msg);
   }
@@ -241,6 +244,9 @@ const Player = (() => {
   function connFail(msg) {
     if (local) return;
     dbg('FAILED: ' + msg);
+    // If we never reached this host at all, stop future loads auto-dialing
+    // the same (likely dead) room; the retry button still works explicitly.
+    if (!connected && !view) { try { sessionStorage.removeItem('mafia-session'); } catch (e) {} }
     cleanup(false);
     const c = el(mount);
     if (!c) return;

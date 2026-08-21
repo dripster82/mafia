@@ -234,5 +234,10 @@ const App = (() => {
 
   document.addEventListener('DOMContentLoaded', init);
 
+  // iOS Safari restores pages from the back-forward cache without re-running
+  // startup, which can leave a stale screen (old room code, dead session)
+  // under a new ?join= URL. Force a clean boot on restore.
+  window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+
   return { showScreen, showJoinError, joinLinkFor, qrSvgFor };
 })();
