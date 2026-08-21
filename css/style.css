@@ -156,6 +156,8 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chat-msg .chat-who { font-weight: 700; margin-right: 4px; }
 .chat-msg.chat-ghost { color: var(--muted); font-style: italic; }
 .bot-tag { font-size: 0.68em; opacity: 0.8; vertical-align: 1px; }
+.mark-btn { margin-left: auto; padding: 4px 8px; font-size: 0.85rem; }
+.mark-badge { font-size: 0.8em; }
 /* Avatar state rings: gold = public mayor, grey = dead. */
 .av {
   display: inline-flex; align-items: center; justify-content: center;

@@ -307,6 +307,8 @@ const Player = (() => {
         // A new game is forming — clear leftovers from the previous one.
         intel = [];
         roleRevealed = false;
+        marks = {};
+        try { sessionStorage.removeItem('mafia-marks'); } catch (e) {}
       }
       if (nameDraft !== null && view.you.name === nameDraft.trim()) nameDraft = null;
       maybeAnimatePhase(prevPhase, view.phase, view.dayNum);
@@ -404,7 +406,9 @@ const Player = (() => {
           ${p.achievements && p.achievements.length
             ? `<button class="btn small ghost" data-ach="${p.id}">🏆 ${p.achievements.length}</button>`
             : p.achCount ? `<span class="status">🏆 ${p.achCount}</span>` : ''}
-          ${mayorBadge}${poisonBadge}${role}${votes}${dead}</div>`;
+          ${mayorBadge}${poisonBadge}${role}${votes}${dead}
+          ${view.phase !== 'lobby' && view.phase !== 'ended' && p.id !== view.you.id
+            ? `<button class="btn small ghost mark-btn" data-mark="${p.id}" title="Your private read">${markIcon(p.id) || '❓'}</button>` : ''}</div>`;
       }).join('')
     }</div></div>`;
   }
@@ -443,6 +447,7 @@ const Player = (() => {
         // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
         const who = `<span class="vote-who">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}
           <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
+          ${markIcon(t.id) ? `<span class="mark-badge">${markIcon(t.id)}</span>` : ''}
           ${t.isBot ? '<span class="bot-tag">🤖</span>' : ''}
           ${t.poisoned ? '<span>☠️</span>' : ''}
           ${t.role ? `<span class="vote-roleic">${ROLES[t.role].icon}</span>` : ''}</span>`;
@@ -473,7 +478,7 @@ const Player = (() => {
       ${view.canChat ? `<div class="chat-row">
         <input id="chat-input" type="text" maxlength="200" placeholder="${view.ghostChat ? 'Whisper to the other ghosts…' : 'Say something…'}" autocomplete="off" value="${esc(chatDraft)}">
         <button id="chat-send" class="btn">Send</button>
-      </div>${view.ghostChat ? '<p class="muted small-text">👻 Your whispers appear in the chat — but only the dead can see them.</p>' : ''}` : '<p class="muted small-text">The dead may listen, but not speak.</p>'}
+      </div>${view.ghostChat ? '<p class="muted small-text">👻 Your whispers appear in the chat — but only the dead can see them.</p>' : ''}` : `<p class="muted small-text">${view.phase === 'night' ? '🌙 Chat reopens at daybreak.' : 'The dead may listen, but not speak.'}</p>`}
     </div>`;
   }
 
@@ -571,6 +576,20 @@ const Player = (() => {
   /* ---- Per-device record, kept in localStorage ---- */
 
   let newUnlocks = []; // achievements earned this game, for the ended screen
+
+  /* ---- personal sleuth marks: your private read on each player ---- */
+  let marks = {};
+  try { marks = JSON.parse(sessionStorage.getItem('mafia-marks') || '{}'); } catch (e) {}
+  const MARK_ICONS = { innocent: '✅', sus: '🤔', mafia: '🔪' };
+  const MARK_CYCLE = [null, 'innocent', 'sus', 'mafia'];
+
+  function cycleMark(id) {
+    const next = MARK_CYCLE[(MARK_CYCLE.indexOf(marks[id] || null) + 1) % MARK_CYCLE.length];
+    if (next) marks[id] = next; else delete marks[id];
+    try { sessionStorage.setItem('mafia-marks', JSON.stringify(marks)); } catch (e) {}
+  }
+
+  function markIcon(id) { return marks[id] ? MARK_ICONS[marks[id]] : ''; }
 
   /* The full catalogue, grouped under role/section headers.
    * `has(id)` decides which entries render lit vs dimmed. */
@@ -905,6 +924,7 @@ const Player = (() => {
         html += voteHistoryHTML();
         html += chatCardHTML();
       } else {
+        if (view.chat) html += chatCardHTML();
         html += playersListHTML(false);
       }
     }
@@ -964,6 +984,8 @@ const Player = (() => {
         }${n.canSkip ? `<button class="btn ghost" data-night="skip">${esc(n.skipLabel)}</button>` : ''}</div></div>`;
       }
       html += mafiaChatCardHTML();
+      html += chatCardHTML();
+      html += playersListHTML(false);
     }
 
     /* ----- day / voting ----- */
@@ -1169,6 +1191,9 @@ const Player = (() => {
     });
     c.querySelectorAll('[data-takeover]').forEach(b => {
       b.onclick = () => sendAction({ t: 'takeover', targetId: b.dataset.takeover });
+    });
+    c.querySelectorAll('[data-mark]').forEach(b => {
+      b.onclick = () => { cycleMark(b.dataset.mark); render(); };
     });
 
     const copyBtn = el('btn-copy-result');

@@ -2807,6 +2807,12 @@ const Host = (() => {
       view.mafiaChat = G.chat.filter(m => m.chan === 'mafia').slice(-60);
     }
 
+    // At night the day's table talk stays readable (but closed for writing).
+    if (G.phase === 'night') {
+      view.chat = chatFor(p);
+      view.canChat = false;
+    }
+
     if (G.phase === 'day') {
       const counts = {};
       const voters = {};
