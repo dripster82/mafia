@@ -156,7 +156,51 @@ const Host = (() => {
     });
     startLobbyBeacon();
     startConnMonitor();
+    watchOnline();
     render();
+  }
+
+  /* ---- broker recovery: retry button + automatic retry on 'online' ---- */
+
+  let brokerRetrying = false;
+  let onlineWatcher = false;
+
+  function watchOnline() {
+    if (onlineWatcher) return;
+    onlineWatcher = true;
+    window.addEventListener('online', () => { if (offlineMode) retryBroker(); });
+  }
+
+  function retryBroker() {
+    if (brokerRetrying || !roomCode) return;
+    brokerRetrying = true;
+    render();
+    setTimeout(() => { brokerRetrying = false; render(); }, 5000);
+    // Rebuild from scratch on the same room code — a stuck PeerJS socket
+    // can't be trusted to recover with a nudge.
+    try { if (peer) peer.destroy(); } catch (e) {}
+    peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
+    peer.on('open', () => {
+      offlineMode = false;
+      brokerRetrying = false;
+      const pill = document.getElementById('host-room-pill');
+      if (pill) pill.textContent = 'Room: ' + roomCode;
+      if (settings.publicGame) announcePublic();
+      render();
+    });
+    peer.on('connection', conn => {
+      conn.on('data', msg => handleMessage(conn, msg));
+      conn.on('close', () => handleDisconnect(conn));
+      conn.on('error', () => handleDisconnect(conn));
+    });
+    peer.on('error', err => {
+      if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        offlineMode = true;
+        brokerRetrying = false;
+        render();
+      }
+    });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
   }
 
   /* ---- who's connected how (host panel) ---- */
@@ -206,7 +250,8 @@ const Host = (() => {
       p2p: '🌐 peer-to-peer', turn: '📡 TURN relay',
     };
     const humans = G.players.filter(pl => !pl.isBot);
-    return `<div class="card"><h3>📶 Connections${offlineMode ? ' — 📴 offline' : ''}</h3>
+    return `<div class="card"><div class="section-title"><h3>📶 Connections${offlineMode ? ' — 📴 offline' : ''}</h3>
+      ${offlineMode ? `<button class="btn small" data-retry-broker ${brokerRetrying ? 'disabled' : ''}>${brokerRetrying ? '⏳…' : '↻ Retry'}</button>` : ''}</div>
       <div class="player-list">${humans.map(pl => `
         <div class="player-row"><span class="dot ${pl.connected ? 'on' : 'off'}"></span>
           <span class="name">${pl.avatar || ''} ${esc(pl.name)}</span>
@@ -346,6 +391,7 @@ const Host = (() => {
 
     peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
     peer.on('open', () => {
+      offlineMode = false;
       const pill = document.getElementById('host-room-pill');
       if (pill) pill.textContent = 'Room: ' + roomCode;
       render();
@@ -366,6 +412,7 @@ const Host = (() => {
       }
     });
     peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+    watchOnline();
 
     // Re-arm whatever clock the phase was running on.
     const remaining = G.deadline ? Math.max(5, Math.round((G.deadline - Date.now()) / 1000)) : 0;
@@ -3061,7 +3108,8 @@ const Host = (() => {
           <div class="url">${roomCode ? esc(App.joinLinkFor(roomCode)) : ''}</div>
           <label class="opt" style="justify-content:center;margin-top:10px"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
             🌐 Public game — anyone can find this room on the join page</label>
-          ${offlineMode ? '<p class="error small-text" style="margin-top:8px">📴 No connection to the join server — solo play with bots works, but other devices can’t join until you’re back online.</p>' : ''}
+          ${offlineMode ? `<p class="error small-text" style="margin-top:8px">📴 No connection to the join server — solo play with bots works, but other devices can’t join until you’re back online.</p>
+            <button class="btn small" data-retry-broker style="margin-top:6px" ${brokerRetrying ? 'disabled' : ''}>${brokerRetrying ? '⏳ Reconnecting…' : '↻ Retry connection'}</button>` : ''}
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
@@ -3197,6 +3245,9 @@ const Host = (() => {
     on('btn-force-reveal', () => { if (confirm('Begin the first night now, even though not everyone has confirmed?')) startNight(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
+    });
+    c.querySelectorAll('[data-retry-broker]').forEach(b => {
+      b.onclick = retryBroker;
     });
     const op = el('opt-public');
     if (op) op.onchange = () => {
