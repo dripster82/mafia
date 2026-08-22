@@ -1196,9 +1196,25 @@ const Player = (() => {
     const guideScroll = prevGuide ? prevGuide.scrollTop : 0;
     const prevHist = c.querySelector('.vote-history');
     const histOpen = prevHist ? prevHist.open : false;
+    // Broadcasts re-render constantly — reading the town or scrolling chat
+    // history must survive them. Save every scroll position, restore after.
+    const paneScrolls = {};
+    c.querySelectorAll('.pane').forEach(p => { paneScrolls[p.className] = p.scrollTop; });
+    const scroller = c.classList.contains('content') ? c : (c.closest ? c.closest('.content') : null);
+    const contentScroll = scroller ? scroller.scrollTop : 0;
+    const prevLog = document.getElementById('chat-log');
+    const logNearBottom = prevLog ? prevLog.scrollTop + prevLog.clientHeight >= prevLog.scrollHeight - 60 : true;
+    const logScroll = prevLog ? prevLog.scrollTop : 0;
+    const prevMLog = document.getElementById('mchat-log');
+    const mlogNearBottom = prevMLog ? prevMLog.scrollTop + prevMLog.clientHeight >= prevMLog.scrollHeight - 60 : true;
+    const mlogScroll = prevMLog ? prevMLog.scrollTop : 0;
 
     c.innerHTML = html;
 
+    c.querySelectorAll('.pane').forEach(p => {
+      if (paneScrolls[p.className]) p.scrollTop = paneScrolls[p.className];
+    });
+    if (scroller && contentScroll) scroller.scrollTop = contentScroll;
     const gp = c.querySelector('.guide-panel');
     if (gp && guideScroll) gp.scrollTop = guideScroll;
     const vh = c.querySelector('.vote-history');
@@ -1224,7 +1240,9 @@ const Player = (() => {
     const cs = el('chat-send');
     if (cs) cs.onclick = sendChat;
     const cl = el('chat-log');
-    if (cl) cl.scrollTop = cl.scrollHeight;
+    // Follow new messages only when already at the bottom — never yank
+    // someone who scrolled up to read the history.
+    if (cl) cl.scrollTop = logNearBottom ? cl.scrollHeight : logScroll;
 
     const sendMChat = () => {
       const mi = el('mchat-input');
@@ -1246,7 +1264,7 @@ const Player = (() => {
     const ms = el('mchat-send');
     if (ms) ms.onclick = sendMChat;
     const mcl = el('mchat-log');
-    if (mcl) mcl.scrollTop = mcl.scrollHeight;
+    if (mcl) mcl.scrollTop = mlogNearBottom ? mcl.scrollHeight : mlogScroll;
 
     const gb = el('btn-role-guide');
     if (gb) gb.onclick = () => { guideOpen = true; render(); };
