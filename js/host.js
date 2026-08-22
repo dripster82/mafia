@@ -36,6 +36,7 @@ const Host = (() => {
   let pendingAnnounce = null; // trailing announce when a change hits the throttle
   let voteCloseTimer = null; // short pause between the last vote and the verdict
   let hostPanelOpen = false; // in-game host panels fold away by default
+  let rolesFoldOpen = false; // the roles catalogue is long — closed until edited
   let offlineMode = false;   // broker unreachable: solo-with-bots still works
   let connTypeTimer = null;  // periodic P2P/TURN measurement for the host panel
   let verdictTimer = null;   // when the verdict screen moves on
@@ -155,7 +156,51 @@ const Host = (() => {
     });
     startLobbyBeacon();
     startConnMonitor();
+    watchOnline();
     render();
+  }
+
+  /* ---- broker recovery: retry button + automatic retry on 'online' ---- */
+
+  let brokerRetrying = false;
+  let onlineWatcher = false;
+
+  function watchOnline() {
+    if (onlineWatcher) return;
+    onlineWatcher = true;
+    window.addEventListener('online', () => { if (offlineMode) retryBroker(); });
+  }
+
+  function retryBroker() {
+    if (brokerRetrying || !roomCode) return;
+    brokerRetrying = true;
+    render();
+    setTimeout(() => { brokerRetrying = false; render(); }, 5000);
+    // Rebuild from scratch on the same room code — a stuck PeerJS socket
+    // can't be trusted to recover with a nudge.
+    try { if (peer) peer.destroy(); } catch (e) {}
+    peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
+    peer.on('open', () => {
+      offlineMode = false;
+      brokerRetrying = false;
+      const pill = document.getElementById('host-room-pill');
+      if (pill) pill.textContent = 'Room: ' + roomCode;
+      if (settings.publicGame) announcePublic();
+      render();
+    });
+    peer.on('connection', conn => {
+      conn.on('data', msg => handleMessage(conn, msg));
+      conn.on('close', () => handleDisconnect(conn));
+      conn.on('error', () => handleDisconnect(conn));
+    });
+    peer.on('error', err => {
+      if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        offlineMode = true;
+        brokerRetrying = false;
+        render();
+      }
+    });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
   }
 
   /* ---- who's connected how (host panel) ---- */
@@ -205,7 +250,8 @@ const Host = (() => {
       p2p: '🌐 peer-to-peer', turn: '📡 TURN relay',
     };
     const humans = G.players.filter(pl => !pl.isBot);
-    return `<div class="card"><h3>📶 Connections${offlineMode ? ' — 📴 offline' : ''}</h3>
+    return `<div class="card"><div class="section-title"><h3>📶 Connections${offlineMode ? ' — 📴 offline' : ''}</h3>
+      ${offlineMode ? `<button class="btn small" data-retry-broker ${brokerRetrying ? 'disabled' : ''}>${brokerRetrying ? '⏳…' : '↻ Retry'}</button>` : ''}</div>
       <div class="player-list">${humans.map(pl => `
         <div class="player-row"><span class="dot ${pl.connected ? 'on' : 'off'}"></span>
           <span class="name">${pl.avatar || ''} ${esc(pl.name)}</span>
@@ -345,6 +391,7 @@ const Host = (() => {
 
     peer = new Peer(PEER_PREFIX + roomCode, Object.assign({}, PEER_OPTS, window.MAFIA_PEER_CONFIG || {}));
     peer.on('open', () => {
+      offlineMode = false;
       const pill = document.getElementById('host-room-pill');
       if (pill) pill.textContent = 'Room: ' + roomCode;
       render();
@@ -365,6 +412,7 @@ const Host = (() => {
       }
     });
     peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+    watchOnline();
 
     // Re-arm whatever clock the phase was running on.
     const remaining = G.deadline ? Math.max(5, Math.round((G.deadline - Date.now()) / 1000)) : 0;
@@ -418,6 +466,9 @@ const Host = (() => {
     if (msg.t === 'pickRole') return handlePickRole(p, msg.role);
     if (msg.t === 'chat') return handleChat(p, msg.text, msg.chan);
     if (msg.t === 'takeover') return handleTakeover(p, conn, msg.targetId);
+    // Table management comes only from the host's own seat — never the network.
+    if (msg.t === 'kick' && conn === localConn && G.phase === 'lobby') return kickPlayer(msg.targetId);
+    if (msg.t === 'addBot' && conn === localConn && G.phase === 'lobby') return addBot();
     if (msg.t === 'achShare') {
       if (Array.isArray(msg.ach)) p.achShare = msg.ach.filter(x => typeof x === 'string').slice(0, 100);
       return;
@@ -2826,6 +2877,7 @@ const Host = (() => {
         id: p.id, name: p.name, alive: p.alive, avatar: p.avatar, spectator: !!p.spectator,
         role: G.phase === 'lobby' ? null : p.role,
         info: G.phase === 'lobby' ? [] : roleInfoFor(p),
+        isHost: !!(localConn && p.id === localConn._playerId),
       },
       players: G.players.map(t => ({
         id: t.id, name: t.name, alive: t.alive, connected: t.connected, avatar: t.avatar,
@@ -3056,23 +3108,17 @@ const Host = (() => {
           <div class="url">${roomCode ? esc(App.joinLinkFor(roomCode)) : ''}</div>
           <label class="opt" style="justify-content:center;margin-top:10px"><input type="checkbox" id="opt-public" ${settings.publicGame ? 'checked' : ''}>
             🌐 Public game — anyone can find this room on the join page</label>
-          ${offlineMode ? '<p class="error small-text" style="margin-top:8px">📴 No connection to the join server — solo play with bots works, but other devices can’t join until you’re back online.</p>' : ''}
+          ${offlineMode ? `<p class="error small-text" style="margin-top:8px">📴 No connection to the join server — solo play with bots works, but other devices can’t join until you’re back online.</p>
+            <button class="btn small" data-retry-broker style="margin-top:6px" ${brokerRetrying ? 'disabled' : ''}>${brokerRetrying ? '⏳ Reconnecting…' : '↻ Retry connection'}</button>` : ''}
         </div>
         <div class="card">
           <div class="section-title"><h3>Host controls</h3>
             <span class="muted small-text">${n >= MIN_PLAYERS ? esc(roleSummary(n, deckOpts())) : `need ${MIN_PLAYERS - n} more`}</span></div>
-          <div class="player-list">${G.players.map(p => `
-            <div class="player-row">
-              <span class="dot ${p.connected ? 'on' : 'off'}"></span>
-              <span class="name">${p.avatar || ''} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${localConn && p.id === localConn._playerId ? ' (you)' : ''}</span>
-              ${localConn && p.id === localConn._playerId ? '' : `<button class="btn small ghost" data-kick="${p.id}">✕</button>`}
-            </div>`).join('')}</div>
-          <button id="btn-start" class="btn primary big" style="margin-top:12px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
+          <button id="btn-start" class="btn primary big" style="margin-top:10px;width:100%" ${n < MIN_PLAYERS ? 'disabled' : ''}>
             ${n < MIN_PLAYERS ? `Need at least ${MIN_PLAYERS} players` : `Start game with ${n} players`}
           </button>
-          <button id="btn-add-bot" class="btn" style="margin-top:8px;width:100%">🤖 Add a bot player</button>
           <p class="hint">You're playing too — the app runs the game and keeps everyone's role secret, including from you.
-          Bots fill empty seats so you can try the game solo; kick them with ✕ before a real game.</p>
+          Everyone appears in the Players list above — kick with ✕ there. Bots fill empty seats so you can try the game solo.</p>
         </div>
         <div class="card"><h3>Game options</h3>
           <label class="opt"><input type="checkbox" id="opt-safe-night" ${settings.safeFirstNight ? 'checked' : ''}>
@@ -3106,7 +3152,9 @@ const Host = (() => {
               `<option value="${v}" ${settings.dayTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select></label>
         </div>
-        <div class="card"><h3>Extra roles</h3>
+        <details class="card roles-fold" id="roles-fold" ${rolesFoldOpen ? 'open' : ''}>
+          <summary><h3>🎭 Extra roles</h3>
+            <span class="muted small-text">${Object.keys(settings.roles).filter(r => settings.roles[r]).length} enabled · tap to ${rolesFoldOpen ? 'close' : 'edit'}</span></summary>
           <p class="hint" style="margin:4px 0 8px">Enabled roles join the deck when there are enough players (Villager seats are used first).
           ⚠️ Every mafia support role grows the mafia team — enable a similar number of village roles to keep the game fair.</p>
           ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:10px 0 2px">${g.title}</p>` +
@@ -3115,7 +3163,7 @@ const Host = (() => {
                 <span><strong>${ROLES[r].icon} ${ROLES[r].name}</strong>${ROLE_NEEDS[r] ? ` <span class="muted small-text">⚙️ ${ROLE_NEEDS[r].label}</span>` : ''}<br>
                 <span class="muted small-text">${esc(ROLES[r].desc)}</span></span></label>`).join('')
           ).join('')}
-        </div>`;
+        </details>`;
     }
 
     if (G.phase === 'reveal') {
@@ -3166,6 +3214,8 @@ const Host = (() => {
     if (G.phase === 'lobby') {
       html += connCardHTML();
       html += logHTML();
+      // Two magazine columns on wide screens; a single flow on phones.
+      html = `<div class="host-lobby">${html}</div>`;
     } else {
       html += connCardHTML();
       const openNow = G.phase === 'ended' ? true : hostPanelOpen;
@@ -3173,12 +3223,16 @@ const Host = (() => {
         ? `<div class="card"><button id="btn-restart" class="btn" style="width:100%">🔁 Restart — scrap this game, back to the lobby</button></div>`
         : '';
       html = `<details class="host-fold" id="host-fold" ${openNow ? 'open' : ''}>
-        <summary>🛠 Host controls &amp; public log</summary>${html}${restart}${logHTML()}</details>`;
+        <summary>🛠 Host</summary>${html}${restart}${logHTML()}</details>`;
     }
     c.innerHTML = html;
 
     const fold = el('host-fold');
     if (fold) fold.ontoggle = () => { hostPanelOpen = fold.open; };
+    const rfold = el('roles-fold');
+    if (rfold) rfold.ontoggle = () => {
+      if (rolesFoldOpen !== rfold.open) { rolesFoldOpen = rfold.open; render(); }
+    };
 
     const on = (id, fn) => { const b = el(id); if (b) b.onclick = fn; };
     on('btn-start', startGame);
@@ -3188,10 +3242,12 @@ const Host = (() => {
     on('btn-restart', () => {
       if (confirm('Restart the game? The current game is abandoned — roles are discarded and everyone returns to the lobby.')) playAgain();
     });
-    on('btn-add-bot', addBot);
     on('btn-force-reveal', () => { if (confirm('Begin the first night now, even though not everyone has confirmed?')) startNight(); });
     c.querySelectorAll('[data-kick]').forEach(b => {
       b.onclick = () => kickPlayer(b.dataset.kick);
+    });
+    c.querySelectorAll('[data-retry-broker]').forEach(b => {
+      b.onclick = retryBroker;
     });
     const op = el('opt-public');
     if (op) op.onchange = () => {

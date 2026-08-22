@@ -389,26 +389,38 @@ const Player = (() => {
     </div>`;
   }
 
+  /* The town gallery: everyone as a tile — avatar big, name under, state
+   * tags below, your private sleuth mark pinned to the corner. */
   function playersListHTML(withVotes) {
     const counts = (view.vote && view.vote.counts) || {};
-    return `<div class="card"><h3>Players</h3><div class="player-list">${
+    const deadLabel = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding' };
+    // The host manages the table from here: add-bot lives in the header so
+    // it stays put as the gallery grows, kicks sit on the tiles themselves.
+    const addBot = view.phase === 'lobby' && view.you.isHost
+      ? '<button id="btn-add-bot" class="btn small">🤖 Add a bot</button>' : '';
+    return `<div class="card"><div class="section-title"><h3>Players</h3>${addBot}</div><div class="tile-grid">${
       view.players.map(p => {
-        const role = p.role ? `<span class="role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>` : '';
-        const votes = withVotes && counts[p.id] ? `<span class="vote-count">${counts[p.id]} 🗳</span>` : '';
-        const deadLabel = { vote: 'voted out', vigilante: 'shot', poison: 'poisoned', guard: 'died guarding' };
-        const dead = !p.alive
-          ? `<span class="status">${p.spectator ? '👁 spectating' : deadLabel[p.causeOfDeath] || 'killed'}</span>` : '';
-        const mayorBadge = p.pledged && p.alive ? '<span class="status">🎖 Mayor</span>' : '';
-        const poisonBadge = p.poisoned ? '<span class="status">☠️ poisoned</span>' : '';
-        return `<div class="player-row ${p.alive ? '' : 'dead'}">
-          ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : p.spectator ? '<span class="skull">👁</span>' : '<span class="skull">💀</span>'}
-          <span class="name">${avatarHTML(p.avatar, { dead: !p.alive && !p.spectator, mayor: p.pledged && p.alive })} ${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' (you)' : ''}</span>
-          ${p.achievements && p.achievements.length
-            ? `<button class="btn small ghost" data-ach="${p.id}">🏆 ${p.achievements.length}</button>`
-            : p.achCount ? `<span class="status">🏆 ${p.achCount}</span>` : ''}
-          ${mayorBadge}${poisonBadge}${role}${votes}${dead}
-          ${view.phase !== 'lobby' && view.phase !== 'ended' && p.id !== view.you.id
-            ? `<button class="btn small ghost mark-btn" data-mark="${p.id}" title="Your private read">${markIcon(p.id) || '❓'}</button>` : ''}</div>`;
+        const tags = [];
+        // If their role tag already reads "Mayor" (your own card, or a
+        // revealed role), the pledge badge would be the same pin twice.
+        if (p.pledged && p.alive && p.role !== 'mayor') tags.push('<span class="tag tag-gold">🎖 Mayor</span>');
+        if (p.poisoned) tags.push('<span class="tag tag-red">☠️ poisoned</span>');
+        if (p.role) tags.push(`<span class="tag role-tag ${ROLES[p.role].team}">${ROLES[p.role].icon} ${ROLES[p.role].name}</span>`);
+        if (withVotes && counts[p.id]) tags.push(`<span class="tag">${counts[p.id]} 🗳</span>`);
+        if (!p.alive) tags.push(`<span class="tag tag-dim">${p.spectator ? '👁 spectating' : deadLabel[p.causeOfDeath] || 'killed'}</span>`);
+        if (p.achievements && p.achievements.length)
+          tags.push(`<button class="tag tag-btn" data-ach="${p.id}">🏆 ${p.achievements.length}</button>`);
+        else if (p.achCount) tags.push(`<span class="tag tag-dim">🏆 ${p.achCount}</span>`);
+        const mark = view.phase !== 'lobby' && view.phase !== 'ended' && p.id !== view.you.id
+          ? `<button class="mark-btn tile-mark" data-mark="${p.id}" title="Your private read">${markIcon(p.id) || '❓'}</button>`
+          : view.phase === 'lobby' && view.you.isHost && p.id !== view.you.id
+          ? `<button class="mark-btn tile-mark tile-kick" data-kick="${p.id}" title="Remove from the game">✕</button>` : '';
+        return `<div class="tile ${p.alive ? '' : 'dead'}">
+          ${p.alive ? `<span class="dot ${p.connected ? 'on' : 'off'}"></span>` : `<span class="tile-skull">${p.spectator ? '👁' : '💀'}</span>`}
+          ${mark}
+          <span class="tile-av">${avatarHTML(p.avatar, { dead: !p.alive && !p.spectator, mayor: p.pledged && p.alive })}</span>
+          <span class="tile-name">${esc(p.name)}${p.isBot ? ' <span class="bot-tag">🤖</span>' : ''}${p.id === view.you.id ? ' <span class="you-tag">you</span>' : ''}</span>
+          ${tags.length ? `<span class="tile-tags">${tags.join('')}</span>` : ''}</div>`;
       }).join('')
     }</div></div>`;
   }
@@ -437,34 +449,34 @@ const Player = (() => {
       avatar: t.avatar, name: t.name, poisoned: t.poisoned,
     }));
     if (opts.includeNobody) rows.push({ id: 'nobody', avatar: '🕊', name: 'No one' });
-    // The row closest to elimination gets highlighted.
+    // The tile closest to elimination gets highlighted.
     let leadId = null, leadN = 0;
     v.targets.forEach(t => { const n = v.counts[t.id] || 0; if (!t.dead && n > leadN) { leadN = n; leadId = t.id; } });
-    return `<div class="target-grid">${
+    // Ballot tiles — the same avatar cards as the town gallery: tap to vote.
+    return `<div class="target-grid vote-tiles">${
       rows.map(t => {
         const votersHere = v.voters && v.voters[t.id] ? v.voters[t.id].map(esc).join(', ') : '';
         const count = v.counts[t.id] || 0;
-        // Fixed identity order: avatar → name → (you) → ☠️ → role icon.
-        const who = `<span class="vote-who">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}
-          <span class="vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
-          ${markIcon(t.id) ? `<span class="mark-badge">${markIcon(t.id)}</span>` : ''}
-          ${t.isBot ? '<span class="bot-tag">🤖</span>' : ''}
-          ${t.poisoned ? '<span>☠️</span>' : ''}
-          ${t.role ? `<span class="vote-roleic">${ROLES[t.role].icon}</span>` : ''}</span>`;
-        const pill = t.dead
-          ? `<span class="vote-deadpill">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`
-          : count ? `<span class="vote-count-pill">${count} 🗳</span>` : '';
+        const tags = [];
+        if (t.isBot) tags.push('<span class="tag tag-dim">🤖 bot</span>');
+        if (t.poisoned) tags.push('<span class="tag tag-red">☠️</span>');
+        if (t.role) tags.push(`<span class="tag">${ROLES[t.role].icon} ${ROLES[t.role].name}</span>`);
+        if (t.dead) tags.push(`<span class="tag tag-dim">💀 ${deadLabels[t.causeOfDeath] || 'dead'}</span>`);
         const markCtl = !t.dead && !t.self && t.id !== 'nobody'
-          ? `<span class="mark-btn vote-mark" data-mark="${t.id}" title="Your private read">${markIcon(t.id) || '❓'}</span>`
+          ? `<span class="mark-btn tile-mark" data-mark="${t.id}" title="Your private read">${markIcon(t.id) || '❓'}</span>`
           : '';
-        const inner = `<span class="vote-top">${who}<span class="vote-side">${markCtl}${pill}</span></span>
+        const inner = `${markCtl}
+          ${count ? `<span class="vote-count-pill tile-count">${count} 🗳</span>` : ''}
+          <span class="tile-av">${avatarHTML(t.avatar, { dead: t.dead, mayor: t.pledged && !t.dead })}</span>
+          <span class="tile-name vote-name">${esc(t.name)}${t.self ? ' (you)' : ''}</span>
+          ${tags.length ? `<span class="tile-tags">${tags.join('')}</span>` : ''}
           ${votersHere ? `<span class="vote-under">↳ ${votersHere}</span>` : ''}`;
-        const cls = `btn vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row' : ''}${t.self ? ' self-row' : ''}`;
+        const cls = `tile vote-tile vote-line${t.id === leadId ? ' leading' : ''}${t.dead ? ' dead-row dead' : ''}${t.self ? ' self-row' : ''}`;
         return (t.dead || t.self || opts.readonly)
           ? `<div class="${cls}">${inner}</div>`
-          : `<button class="${cls} ${v.yourVote === t.id ? 'selected' : ''}" data-vote="${t.id}">${inner}</button>`;
+          : `<button class="${cls} ${v.yourVote === t.id ? ' selected' : ''}" data-vote="${t.id}">${inner}</button>`;
       }).join('')
-    }${opts.retract && v.yourVote ? '<button class="btn ghost" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
+    }${opts.retract && v.yourVote ? '<button class="btn ghost grid-span" data-vote="retract">↩ Take it back (save for a later day)</button>' : ''}</div>`;
   }
 
   /* Day-phase table talk. */
@@ -508,6 +520,12 @@ const Player = (() => {
     const old = document.getElementById(pillId2);
     const log = document.getElementById('chat-log');
     const total = view && view.chat ? view.chat.length : 0;
+    // In the tabbed shell the Chat tab's badge does this job instead.
+    if (document.querySelector('.tab-bar')) {
+      if (old) old.remove();
+      if (activeTab === 'chat') chatSeenLen = total;
+      return;
+    }
     const offScreen = log && log.getBoundingClientRect().top > window.innerHeight - 80;
     if (!log || !offScreen) {
       chatSeenLen = total;
@@ -533,7 +551,9 @@ const Player = (() => {
   /* Floating role-guide: a 📖 button on every screen, full catalogue overlay. */
   let guideOpen = false;
   function guideHTML() {
-    const fab = `<button id="btn-role-guide" class="guide-fab" title="Role guide">📖</button>`;
+    // In the tabbed shell these buttons live in the phase strip instead.
+    const tabbedNow = view && (view.phase === 'day' || view.phase === 'night');
+    const fab = tabbedNow ? '' : `<button id="btn-role-guide" class="guide-fab" title="Role guide">📖</button>`;
     if (!guideOpen) return fab;
     const all = Object.values(ROLES);
     const section = (title, roles) => `<p class="small-text muted" style="margin:12px 0 2px"><strong>${title}</strong></p>` +
@@ -721,7 +741,8 @@ const Player = (() => {
   let trophyOpen = false;
   let trophyViewId = null;
   function trophyHTML() {
-    const fab = `<button id="btn-profile-fab" class="guide-fab profile-fab" title="Profile & history">👤</button>
+    const tabbedNow = view && (view.phase === 'day' || view.phase === 'night');
+    const fab = tabbedNow ? '' : `<button id="btn-profile-fab" class="guide-fab profile-fab" title="Profile & history">👤</button>
       <button id="btn-trophies" class="guide-fab trophy-fab" title="Achievements">🏆</button>`;
     if (!trophyOpen) return fab;
     let title = '🏆 Your achievements';
@@ -804,17 +825,81 @@ const Player = (() => {
     }</div></div>`;
   }
 
+  /* ---------------- app shell (phase strip + tabbed panes) ---------------- */
+
+  let activeTab = 'town';        // pane shown on small screens
+  let lastPhaseForTab = null;    // reset the default tab when the phase turns
+
+  function phaseStripHTML() {
+    const alive = view.players ? view.players.filter(p => p.alive).length : 0;
+    return `<div class="phase-strip strip-${view.phase}">
+      <span class="ps-name">${view.phase === 'night' ? '🌙 Night' : '☀️ Day'} ${view.dayNum}</span>
+      ${view.timer ? '<span id="phase-timer" class="phase-timer"></span>' : ''}
+      <span class="ps-alive">${alive}<span class="ps-of">/${view.players.length}</span> alive</span>
+      <span class="strip-tools">
+        <button id="btn-profile-fab" class="strip-tool" title="Profile & history">👤</button>
+        <button id="btn-trophies" class="strip-tool" title="Achievements">🏆</button>
+        <button id="btn-role-guide" class="strip-tool" title="Role guide">📖</button>
+      </span>
+    </div>`;
+  }
+
+  function tabBarHTML() {
+    const unread = view.chat ? Math.max(0, view.chat.length - chatSeenLen) : 0;
+    const needsYou = view.phase === 'night' && view.you.alive
+      && view.night && view.night.prompt && !view.night.acted;
+    const needsTown = view.phase === 'day' && view.you.alive
+      && view.vote && !view.vote.yourVote && !view.vote.closing;
+    const tab = (id, icon, label, alert, badge) =>
+      `<button class="tab${activeTab === id ? ' active' : ''}" data-tab="${id}"><span class="tab-ic">${icon}</span><span class="tab-lb">${label}</span>${
+        badge ? `<em class="tab-badge">${badge > 99 ? '99+' : badge}</em>` : alert ? '<em class="tab-badge alert">!</em>' : ''}</button>`;
+    return `<nav class="tab-bar">
+      ${tab('you', '🎭', 'You', needsYou, 0)}
+      ${tab('town', view.phase === 'night' ? '🌘' : '🏛', view.phase === 'day' ? 'Vote' : 'Town', needsTown, 0)}
+      ${tab('chat', '💬', 'Chat', false, activeTab === 'chat' ? 0 : unread)}
+    </nav>`;
+  }
+
   function render() {
     if (!view) { renderStatus('Connecting to the game…'); return; }
     const c = el(mount);
     if (!c) return;
-    let html = '';
 
-    if (!connected) {
-      html += `<div class="banner death pulsing"><p>⚠️ Connection lost — trying to reconnect…${
-        reconnectAttempts > 3 ? '<br><span class="small-text muted">Still no luck — check the host’s screen is on with the game open.</span>' : ''
-      }</p></div>`;
-    }
+    // Day and night run in the tabbed app shell; every other phase is a
+    // single scrolling flow (the lobby IS the config screen, endings are a story).
+    const tabbed = view.phase === 'day' || view.phase === 'night';
+    if (tabbed) {
+      if (view.phase !== lastPhaseForTab) {
+        activeTab = view.phase === 'night' && view.you.alive && view.night && view.night.prompt
+          ? 'you' : 'town';
+        lastPhaseForTab = view.phase;
+      }
+    } else lastPhaseForTab = null;
+
+    const lost = !connected
+      ? `<div class="banner death pulsing"><p>⚠️ Connection lost — trying to reconnect…${
+          reconnectAttempts > 3 ? '<br><span class="small-text muted">Still no luck — check the host’s screen is on with the game open.</span>' : ''
+        }</p></div>`
+      : '';
+
+    let html = '';
+    let you = '', town = '', chat = '';
+
+    const deadBannerHTML = () => view.you.spectator
+      ? `<div class="banner night"><span class="big-emoji">👁</span>
+          <h2>You're spectating</h2>
+          <p class="muted">This game is in progress — watch along, and you'll be dealt in automatically when the next one starts.</p>
+          <p class="muted small-text">💬 During the day you can whisper with the dead in the chat.</p></div>`
+      : `<div class="banner death"><span class="big-emoji">👻</span>
+          <h2>You are dead</h2>
+          <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
+
+    const abandonedHTML = () => view.you.spectator && view.abandoned && view.abandoned.length
+      ? `<div class="card"><h3>🪑 Abandoned seats</h3>
+          <p class="muted small-text" style="margin:4px 0 10px">These players left mid-game — take one over and play their role from here.</p>
+          <div class="target-grid">${view.abandoned.map(a =>
+            `<button class="btn" data-takeover="${a.id}">${a.avatar || ''} ${esc(a.name)} — take over</button>`).join('')}</div></div>`
+      : '';
 
     /* ----- lobby ----- */
     if (view.phase === 'lobby') {
@@ -830,8 +915,8 @@ const Player = (() => {
           ${view.settings.rumourDays === 0 ? ' · No rumours' : view.settings.rumourDays === 1 ? ' · Daily rumours' : ''}<br>
           ⏱ Night: ${view.settings.nightTimer ? Math.round(view.settings.nightTimer / 60) + ' min' : 'no limit'} ·
           Discussion: ${view.settings.dayTimer ? Math.round(view.settings.dayTimer / 60) + ' min' : 'no limit'}</p>` : ''}</div>`;
+      html += playersListHTML(false);
       html += profileCardHTML();
-      html += chatCardHTML();
       if (!local && view.roomCode) {
         html += `<div class="card room-code-box">
           <div class="muted small-text">Invite others — scan to join room <strong>${esc(view.roomCode)}</strong></div>
@@ -839,21 +924,21 @@ const Player = (() => {
           <div class="url">${esc(App.joinLinkFor(view.roomCode))}</div>
         </div>`;
       }
-      html += playersListHTML(false);
+      html += chatCardHTML();
     }
 
     /* ----- verdict reveal (short pause before night) ----- */
     else if (view.phase === 'verdict') {
       const a = view.announce || {};
       if (a.eliminatedName) {
-        const you = a.eliminatedName === view.you.name;
+        const youAre = a.eliminatedName === view.you.name;
         html += `<div class="banner death"><span class="big-emoji">⚖️</span>
           <h2>The village has spoken</h2>
           <p>The village ganged up on <strong>${esc(a.eliminatedName)}</strong> — they were eliminated.</p>
           ${a.eliminatedRole ? `<p><strong>${esc(a.eliminatedName)}</strong> was the
             <strong>${ROLES[a.eliminatedRole].icon} ${ROLES[a.eliminatedRole].name}</strong>.</p>`
           : `<p class="muted">Their role goes with them to the grave.</p>`}
-          ${you ? '<p><strong>That’s you — you’re out. 👻</strong></p>' : ''}</div>`;
+          ${youAre ? '<p><strong>That’s you — you’re out. 👻</strong></p>' : ''}</div>`;
       } else {
         html += `<div class="banner day"><span class="big-emoji">🕊</span>
           <h2>No one was eliminated</h2>
@@ -880,58 +965,6 @@ const Player = (() => {
         : `<p class="progress-note pulsing">Night falls in a moment…</p>`;
     }
 
-    /* ----- dead player / late-joining spectator ----- */
-    else if (view.phase !== 'ended' && !view.you.alive) {
-      html += view.you.spectator
-        ? `<div class="banner night"><span class="big-emoji">👁</span>
-            <h2>You're spectating</h2>
-            <p class="muted">This game is in progress — watch along, and you'll be dealt in automatically when the next one starts.</p>
-            <p class="muted small-text">💬 During the day you can whisper with the dead in the chat below.</p></div>`
-        : `<div class="banner death"><span class="big-emoji">👻</span>
-            <h2>You are dead</h2>
-            <p class="muted">You were the ${ROLES[view.you.role].name}. Sit back and watch — but don't give anything away!</p></div>`;
-      html += announceHTML();
-      html += daySummaryHTML();
-      if (view.you.spectator && view.abandoned && view.abandoned.length) {
-        html += `<div class="card"><h3>🪑 Abandoned seats</h3>
-          <p class="muted small-text" style="margin:4px 0 10px">These players left mid-game — take one over and play their role from here.</p>
-          <div class="target-grid">${view.abandoned.map(a =>
-            `<button class="btn" data-takeover="${a.id}">${a.avatar || ''} ${esc(a.name)} — take over</button>`).join('')}</div></div>`;
-      }
-      // During the day the dead see the vote list (their ghost vote if they
-      // have one, read-only otherwise) — no separate players list.
-      if (view.phase === 'day' && view.vote) {
-        const v = view.vote;
-        if (v.ghost) {
-          html += `<div class="card">
-            <div class="section-title"><h3>👻 Your last vote</h3>
-            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-            <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day.
-            A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
-            ${v.ghostSaved ? '<p class="progress-note" style="margin-bottom:10px">💾 Saved for a later day — you can still change your mind below.</p>' : ''}
-            ${voteGridHTML(v, { retract: true })}
-            ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
-          </div>`;
-        } else {
-          const runoffBallot = v.runoff && v.runoff.eligible;
-          html += `<div class="card">
-            <div class="section-title"><h3>${runoffBallot ? '⚖️ Runoff — your voice counts' : '🗳 The vote'}</h3>
-            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-            ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ Tie between ${v.runoff.names.map(esc).join(' and ')}${runoffBallot ? ' — you voted this round, so vote again or abstain.' : '.'}</p>` : ''}
-            ${!v.runoff && v.ghostSpent ? '<p class="muted small-text" style="margin-bottom:10px">👻 Your last vote has been spent.</p>' : ''}
-            ${voteGridHTML(v, { includeNobody: true, readonly: !runoffBallot })}
-            ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
-              : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
-          </div>`;
-        }
-        html += voteHistoryHTML();
-        html += chatCardHTML();
-      } else {
-        if (view.chat) html += chatCardHTML();
-        html += playersListHTML(false);
-      }
-    }
-
     /* ----- role confirmation before the first night ----- */
     else if (view.phase === 'reveal') {
       html += `<div class="banner night"><span class="big-emoji">🎭</span>
@@ -955,66 +988,95 @@ const Player = (() => {
 
     /* ----- night ----- */
     else if (view.phase === 'night') {
-      html += announceHTML();
-      html += `<div class="banner night"><span class="big-emoji">🌙</span><h2>Night ${view.dayNum}</h2>
-        ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
-      html += roleCardHTML(view.you.role, true);
-
-      const n = view.night;
-      if (n.mates && n.mates.length) {
-        html += `<div class="card"><h3>🔪 Your family</h3>${
-          n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)}${m.isBot ? ' <span class="bot-tag">🤖</span>' : ''} <span class="muted">(${esc(m.role)})</span> — ${
-            m.pick ? `targeting <strong>${esc(m.pick)}</strong>` : '<span class="muted">deciding…</span>'}</p>`).join('')
-        }<p class="hint">Killers should agree on one target — a split vote picks randomly among the top choices.</p></div>`;
-      }
-      html += intelHTML();
-
-      if (!n.prompt) {
-        html += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p>
-          ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
-      } else if (n.acted) {
-        const actedMsg = n.actionSpecial === 'pledge' ? '📣 You will go public at dawn.'
-          : n.actionSpecial === 'hide' ? '🎒 You are lying low tonight.'
-          : n.actionSpecial === 'clean' ? '🧹 You will clean tonight’s kill.'
-          : n.heldFire ? '🕊 You chose to sit tonight out.'
-          : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`;
-        html += `<div class="card center"><p>${actedMsg}</p>
-          <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p>
-          ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
+      const n = view.night || {};
+      if (!view.you.alive) {
+        you += deadBannerHTML();
+        you += announceHTML();
       } else {
-        html += `<div class="card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
-          n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
-        }${n.canSkip ? `<button class="btn ghost" data-night="skip">${esc(n.skipLabel)}</button>` : ''}</div></div>`;
+        you += announceHTML();
+        if (!n.prompt) {
+          you += `<div class="card center"><p class="pulsing">😴 You sleep soundly. Waiting for the night to end…</p>
+            ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
+        } else if (n.acted) {
+          const actedMsg = n.actionSpecial === 'pledge' ? '📣 You will go public at dawn.'
+            : n.actionSpecial === 'hide' ? '🎒 You are lying low tonight.'
+            : n.actionSpecial === 'clean' ? '🧹 You will clean tonight’s kill.'
+            : n.heldFire ? '🕊 You chose to sit tonight out.'
+            : `✅ You chose <strong>${esc(n.actionTarget)}</strong>.`;
+          you += `<div class="card center"><p>${actedMsg}</p>
+            <p class="muted pulsing small-text">Waiting for ${n.waitingOn} more…</p>
+            ${n.waitingNames && n.waitingNames.length ? `<p class="muted small-text">Still to act: ${n.waitingNames.map(esc).join(', ')}</p>` : ''}</div>`;
+        } else {
+          you += `<div class="card action-card"><h3>${esc(n.prompt)}</h3><div class="target-grid">${
+            n.targets.map(t => `<button class="btn" data-night="${t.id}">${t.avatar || ''} ${esc(t.name)}</button>`).join('')
+          }${n.canSkip ? `<button class="btn ghost" data-night="skip">${esc(n.skipLabel)}</button>` : ''}</div></div>`;
+        }
+        you += roleCardHTML(view.you.role, true);
+        if (n.mates && n.mates.length) {
+          you += `<div class="card"><h3>🔪 Your family</h3>${
+            n.mates.map(m => `<p class="small-text">${m.avatar || ''} ${esc(m.name)}${m.isBot ? ' <span class="bot-tag">🤖</span>' : ''} <span class="muted">(${esc(m.role)})</span> — ${
+              m.pick ? `targeting <strong>${esc(m.pick)}</strong>` : '<span class="muted">deciding…</span>'}</p>`).join('')
+          }<p class="hint">Killers should agree on one target — a split vote picks randomly among the top choices.</p></div>`;
+        }
+        you += intelHTML();
       }
-      html += mafiaChatCardHTML();
-      html += chatCardHTML();
-      html += playersListHTML(false);
+      town += daySummaryHTML();
+      town += abandonedHTML();
+      town += playersListHTML(false);
+      town += voteHistoryHTML();
+      chat += mafiaChatCardHTML();
+      chat += chatCardHTML();
     }
 
     /* ----- day / voting ----- */
     else if (view.phase === 'day') {
-      html += `<div class="banner day"><span class="big-emoji">☀️</span><h2>Day ${view.dayNum}</h2>
-        ${view.timer ? '<p id="phase-timer" class="phase-timer"></p>' : ''}</div>`;
-      html += announceHTML();
-      html += daySummaryHTML();
-      html += roleCardHTML(view.you.role, true);
-      html += intelHTML();
-
       const v = view.vote;
-      html += `<div class="card">
-        <div class="section-title"><h3>Vote to eliminate</h3>
-        <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
-        ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ <strong>Runoff!</strong> The vote tied between ${v.runoff.names.map(esc).join(' and ')} — pick one of them, or abstain.</p>` : ''}
-        <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
-        A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
-        ${votePressureHTML(v)}
-        ${voteGridHTML(v, { includeNobody: true })}
-        ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
-          : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
-        </div>`;
-      html += voteHistoryHTML();
-      html += mafiaChatCardHTML();
-      html += chatCardHTML();
+      town += announceHTML();
+      if (!view.you.alive) {
+        you += deadBannerHTML();
+        you += daySummaryHTML();
+        if (v && v.ghost) {
+          town += `<div class="card">
+            <div class="section-title"><h3>👻 Your last vote</h3>
+            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+            <p class="muted small-text" style="margin-bottom:10px">One vote from beyond the grave — cast it today, or save it for a later day.
+            A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
+            ${v.ghostSaved ? '<p class="progress-note" style="margin-bottom:10px">💾 Saved for a later day — you can still change your mind below.</p>' : ''}
+            ${voteGridHTML(v, { retract: true })}
+            ${!v.yourVote && !v.ghostSaved ? '<button class="btn ghost" data-vote="save" style="width:100%;margin-top:8px">💾 Save my vote for a later day</button>' : ''}
+          </div>`;
+        } else if (v) {
+          const runoffBallot = v.runoff && v.runoff.eligible;
+          town += `<div class="card">
+            <div class="section-title"><h3>${runoffBallot ? '⚖️ Runoff — your voice counts' : '🗳 The vote'}</h3>
+            <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+            ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ Tie between ${v.runoff.names.map(esc).join(' and ')}${runoffBallot ? ' — you voted this round, so vote again or abstain.' : '.'}</p>` : ''}
+            ${!v.runoff && v.ghostSpent ? '<p class="muted small-text" style="margin-bottom:10px">👻 Your last vote has been spent.</p>' : ''}
+            ${voteGridHTML(v, { includeNobody: true, readonly: !runoffBallot })}
+            ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
+              : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
+          </div>`;
+        }
+        town += abandonedHTML();
+      } else {
+        you += roleCardHTML(view.you.role, true);
+        you += intelHTML();
+        you += daySummaryHTML();
+        town += `<div class="card">
+          <div class="section-title"><h3>Vote to eliminate</h3>
+          <span class="muted small-text">${v.voted}/${v.needed} voted</span></div>
+          ${v.runoff ? `<p class="progress-note" style="margin-bottom:10px">⚖️ <strong>Runoff!</strong> The vote tied between ${v.runoff.names.map(esc).join(' and ')} — pick one of them, or abstain.</p>` : ''}
+          <p class="muted small-text" style="margin-bottom:10px">Discuss, then cast your vote — you can change it until everyone has voted.
+          A majority (<strong>${v.majority} votes</strong>) is needed to eliminate.</p>
+          ${votePressureHTML(v)}
+          ${voteGridHTML(v, { includeNobody: true })}
+          ${v.closing ? '<p class="progress-note pulsing" style="margin-top:10px">🗳 All votes are in — locking in…</p>'
+            : v.ghostsPending ? `<p class="progress-note" style="margin-top:10px">👻 Waiting on ${v.ghostsPending} ghost vote${v.ghostsPending > 1 ? 's' : ''}…</p>` : ''}
+          </div>`;
+      }
+      town += voteHistoryHTML();
+      chat += chatCardHTML();
+      chat += mafiaChatCardHTML();
     }
 
     /* ----- game over ----- */
@@ -1090,7 +1152,7 @@ const Player = (() => {
 
     // Solo-mode debug: each bot's personal suspicion table.
     if (view.suspicionDebug) {
-      html += `<div class="card"><h3>🧪 Bot suspicion — solo debug</h3>
+      const dbgCard = `<div class="card"><h3>🧪 Bot suspicion — solo debug</h3>
         <p class="muted small-text" style="margin:4px 0 8px">Each bot's own reads (−6 trusted … +10 suspect), its credulity, and how accused it feels (heat).</p>
         ${view.suspicionDebug.map(b => `
           <p class="small-text" style="margin:8px 0 2px"><strong>${b.avatar || ''} ${esc(b.name)}</strong>
@@ -1100,8 +1162,20 @@ const Player = (() => {
               ? b.sees.map(x => `${x.avatar || ''} ${esc(x.name)} <strong class="${x.score > 0 ? 'susp-pos' : 'susp-neg'}">${x.score > 0 ? '+' : ''}${x.score}</strong>`).join(' · ')
               : 'no reads yet'
           }</p>`).join('')}</div>`;
+      if (tabbed) town += dbgCard; else html += dbgCard;
     }
 
+    // Assemble: tabbed shell for day/night, plain scroll for everything else.
+    if (tabbed) {
+      html = lost + phaseStripHTML() + `<div class="panes" data-active="${activeTab}">
+        <section class="pane pane-you">${you}</section>
+        <section class="pane pane-town">${town}</section>
+        <section class="pane pane-chat">${chat}</section>
+      </div>` + tabBarHTML();
+    } else {
+      html = lost + html;
+    }
+    html = `<div class="shell ${tabbed ? 'tabbed' : 'scroll'}">${html}</div>`;
     html += guideHTML();
     html += trophyHTML();
 
@@ -1122,9 +1196,25 @@ const Player = (() => {
     const guideScroll = prevGuide ? prevGuide.scrollTop : 0;
     const prevHist = c.querySelector('.vote-history');
     const histOpen = prevHist ? prevHist.open : false;
+    // Broadcasts re-render constantly — reading the town or scrolling chat
+    // history must survive them. Save every scroll position, restore after.
+    const paneScrolls = {};
+    c.querySelectorAll('.pane').forEach(p => { paneScrolls[p.className] = p.scrollTop; });
+    const scroller = c.classList.contains('content') ? c : (c.closest ? c.closest('.content') : null);
+    const contentScroll = scroller ? scroller.scrollTop : 0;
+    const prevLog = document.getElementById('chat-log');
+    const logNearBottom = prevLog ? prevLog.scrollTop + prevLog.clientHeight >= prevLog.scrollHeight - 60 : true;
+    const logScroll = prevLog ? prevLog.scrollTop : 0;
+    const prevMLog = document.getElementById('mchat-log');
+    const mlogNearBottom = prevMLog ? prevMLog.scrollTop + prevMLog.clientHeight >= prevMLog.scrollHeight - 60 : true;
+    const mlogScroll = prevMLog ? prevMLog.scrollTop : 0;
 
     c.innerHTML = html;
 
+    c.querySelectorAll('.pane').forEach(p => {
+      if (paneScrolls[p.className]) p.scrollTop = paneScrolls[p.className];
+    });
+    if (scroller && contentScroll) scroller.scrollTop = contentScroll;
     const gp = c.querySelector('.guide-panel');
     if (gp && guideScroll) gp.scrollTop = guideScroll;
     const vh = c.querySelector('.vote-history');
@@ -1150,7 +1240,9 @@ const Player = (() => {
     const cs = el('chat-send');
     if (cs) cs.onclick = sendChat;
     const cl = el('chat-log');
-    if (cl) cl.scrollTop = cl.scrollHeight;
+    // Follow new messages only when already at the bottom — never yank
+    // someone who scrolled up to read the history.
+    if (cl) cl.scrollTop = logNearBottom ? cl.scrollHeight : logScroll;
 
     const sendMChat = () => {
       const mi = el('mchat-input');
@@ -1172,7 +1264,7 @@ const Player = (() => {
     const ms = el('mchat-send');
     if (ms) ms.onclick = sendMChat;
     const mcl = el('mchat-log');
-    if (mcl) mcl.scrollTop = mcl.scrollHeight;
+    if (mcl) mcl.scrollTop = mlogNearBottom ? mcl.scrollHeight : mlogScroll;
 
     const gb = el('btn-role-guide');
     if (gb) gb.onclick = () => { guideOpen = true; render(); };
@@ -1195,6 +1287,11 @@ const Player = (() => {
     c.querySelectorAll('[data-takeover]').forEach(b => {
       b.onclick = () => sendAction({ t: 'takeover', targetId: b.dataset.takeover });
     });
+    c.querySelectorAll('[data-kick]').forEach(b => {
+      b.onclick = () => sendAction({ t: 'kick', targetId: b.dataset.kick });
+    });
+    const ab = el('btn-add-bot');
+    if (ab && view.you.isHost) ab.onclick = () => sendAction({ t: 'addBot' });
     c.querySelectorAll('[data-mark]').forEach(b => {
       b.onclick = e => {
         e.stopPropagation();
@@ -1203,6 +1300,32 @@ const Player = (() => {
         render();
       };
     });
+    c.querySelectorAll('[data-tab]').forEach(b => {
+      b.onclick = () => {
+        activeTab = b.dataset.tab;
+        if (activeTab === 'chat') chatSeenLen = view && view.chat ? view.chat.length : 0;
+        render();
+      };
+    });
+    // Swipe left/right anywhere on a pane to move between tabs (phones).
+    const panesEl = c.querySelector('.panes');
+    if (panesEl) {
+      let sx = 0, sy = 0;
+      panesEl.addEventListener('touchstart', e => {
+        sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      }, { passive: true });
+      panesEl.addEventListener('touchend', e => {
+        const dx = e.changedTouches[0].clientX - sx;
+        const dy = e.changedTouches[0].clientY - sy;
+        if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+        const order = ['you', 'town', 'chat'];
+        const i = order.indexOf(activeTab) + (dx < 0 ? 1 : -1);
+        if (i < 0 || i >= order.length) return;
+        activeTab = order[i];
+        if (activeTab === 'chat') chatSeenLen = view && view.chat ? view.chat.length : 0;
+        render();
+      }, { passive: true });
+    }
 
     const copyBtn = el('btn-copy-result');
     if (copyBtn) copyBtn.onclick = () => {
