@@ -838,6 +838,18 @@ div.vote-tile { cursor: default; }
   .host-lobby > * { break-inside: avoid; margin-top: 0 !important; margin-bottom: 14px; }
 }
 
+/* Collapsible roles catalogue in the host lobby. */
+.roles-fold > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.roles-fold > summary::-webkit-details-marker { display: none; }
+.roles-fold > summary h3 { pointer-events: none; }
+
 .opt {
   display: flex;
   align-items: baseline;

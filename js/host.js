@@ -36,6 +36,7 @@ const Host = (() => {
   let pendingAnnounce = null; // trailing announce when a change hits the throttle
   let voteCloseTimer = null; // short pause between the last vote and the verdict
   let hostPanelOpen = false; // in-game host panels fold away by default
+  let rolesFoldOpen = false; // the roles catalogue is long — closed until edited
   let offlineMode = false;   // broker unreachable: solo-with-bots still works
   let connTypeTimer = null;  // periodic P2P/TURN measurement for the host panel
   let verdictTimer = null;   // when the verdict screen moves on
@@ -3103,7 +3104,9 @@ const Host = (() => {
               `<option value="${v}" ${settings.dayTimer === v ? 'selected' : ''}>${l}</option>`).join('')}
             </select></label>
         </div>
-        <div class="card"><h3>Extra roles</h3>
+        <details class="card roles-fold" id="roles-fold" ${rolesFoldOpen ? 'open' : ''}>
+          <summary><h3>🎭 Extra roles</h3>
+            <span class="muted small-text">${Object.keys(settings.roles).filter(r => settings.roles[r]).length} enabled · tap to ${rolesFoldOpen ? 'close' : 'edit'}</span></summary>
           <p class="hint" style="margin:4px 0 8px">Enabled roles join the deck when there are enough players (Villager seats are used first).
           ⚠️ Every mafia support role grows the mafia team — enable a similar number of village roles to keep the game fair.</p>
           ${ROLE_GROUPS.map(g => `<p class="small-text muted" style="margin:10px 0 2px">${g.title}</p>` +
@@ -3112,7 +3115,7 @@ const Host = (() => {
                 <span><strong>${ROLES[r].icon} ${ROLES[r].name}</strong>${ROLE_NEEDS[r] ? ` <span class="muted small-text">⚙️ ${ROLE_NEEDS[r].label}</span>` : ''}<br>
                 <span class="muted small-text">${esc(ROLES[r].desc)}</span></span></label>`).join('')
           ).join('')}
-        </div>`;
+        </details>`;
     }
 
     if (G.phase === 'reveal') {
@@ -3178,6 +3181,10 @@ const Host = (() => {
 
     const fold = el('host-fold');
     if (fold) fold.ontoggle = () => { hostPanelOpen = fold.open; };
+    const rfold = el('roles-fold');
+    if (rfold) rfold.ontoggle = () => {
+      if (rolesFoldOpen !== rfold.open) { rolesFoldOpen = rfold.open; render(); }
+    };
 
     const on = (id, fn) => { const b = el(id); if (b) b.onclick = fn; };
     on('btn-start', startGame);
